@@ -604,6 +604,7 @@
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
 </head>
 <body>
 <canvas id="matrix-bg"></canvas>
@@ -1526,31 +1527,54 @@ function createGLPanel(body, fragSrc, opts = {}) {
   return { canvas, gl, prog, extraLocs };
 }
 
-// --- NETWORK GRAPH (WebGL) ---
+// --- NETWORK TRAFFIC MONITOR (WebGL) ---
 function createNetworkGraph(body) {
-  // 20 procedural nodes with edges — all in shader
-  createGLPanel(body, `
+  const wrapper = document.createElement('div');
+  wrapper.style.cssText = 'width:100%;height:100%;position:relative;';
+  body.appendChild(wrapper);
+
+  let sampleRate = 0.5; // 0.0=slow .. 1.0=fast
+
+  const panel = createGLPanel(wrapper, `
     precision highp float;
     varying vec2 v;
     uniform float T;
     uniform vec2 R;
+    uniform float uRate;
     float hash(float n){return fract(sin(n)*43758.5453);}
+    float hash2(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+
+    // Fixed grid-snapped positions — no drifting, sharp layout
     vec2 nodePos(float id){
-      // Drifting node positions
-      float s=hash(id*1.17)*0.5+0.3;
+      // 5x4 grid with slight jitter
+      float col=mod(id,5.0);
+      float row=floor(id/5.0);
       return vec2(
-        0.1+hash(id*2.31)*0.8+sin(T*s*0.3+id*3.0)*0.06,
-        0.1+hash(id*3.47)*0.8+cos(T*s*0.25+id*5.0)*0.06
+        0.1+col*0.2+hash(id*2.31)*0.04-0.02,
+        0.15+row*0.22+hash(id*3.47)*0.04-0.02
       );
     }
+
     vec3 nodeColor(float id){
       float h=hash(id*4.59);
-      if(h<0.3) return vec3(0.0,1.0,0.25);  // green
-      if(h<0.5) return vec3(0.0,1.0,1.0);    // cyan
-      if(h<0.7) return vec3(1.0,0.75,0.0);   // amber
-      if(h<0.85) return vec3(1.0,0.0,0.25);  // red
-      return vec3(0.75,0.0,1.0);              // purple
+      if(h<0.2) return vec3(0.0,1.0,0.25);
+      if(h<0.4) return vec3(0.0,1.0,1.0);
+      if(h<0.6) return vec3(1.0,0.75,0.0);
+      if(h<0.75) return vec3(1.0,0.0,0.25);
+      return vec3(0.75,0.0,1.0);
     }
+
+    // Diamond SDF
+    float sdDiamond(vec2 p, float s){
+      p=abs(p);
+      return (p.x+p.y-s)*0.707;
+    }
+    // Box SDF
+    float sdBox(vec2 p, vec2 b){
+      vec2 d=abs(p)-b;
+      return length(max(d,0.0))+min(max(d.x,d.y),0.0);
+    }
+
     void main(){
       vec2 uv=v;
       float aspect=R.x/R.y;
@@ -1558,42 +1582,146 @@ function createNetworkGraph(body) {
       float px=1.0/R.y;
       vec3 col=vec3(0.0);
       float N=20.0;
-      // Edges (draw first, underneath)
+      float speed=0.15+uRate*1.4;
+
+      // Subtle background grid
+      vec2 gridUV=uv*R;
+      float gx=step(mod(gridUV.x,30.0),0.8);
+      float gy=step(mod(gridUV.y,30.0),0.8);
+      col+=vec3(0.0,0.25,0.0)*0.12*(gx+gy);
+
+      // Edges — sharp orthogonal-routed lines (L-shaped)
       for(int i=0;i<20;i++){
         float fi=float(i);
-        vec2 a=nodePos(fi)*vec2(aspect,1.0);
-        // Connect to 1-2 other nodes
+        // Each node connects to 2 others
         for(int j=0;j<2;j++){
-          float target=mod(fi+1.0+float(j)*7.0,N);
+          float fj=float(j);
+          float target=mod(fi+1.0+fj*7.0,N);
+          vec2 a=nodePos(fi)*vec2(aspect,1.0);
           vec2 b=nodePos(target)*vec2(aspect,1.0);
-          // Distance from point to line segment
-          vec2 pa=auv-a,ba=b-a;
-          float t=clamp(dot(pa,ba)/dot(ba,ba),0.0,1.0);
-          float d=length(pa-ba*t);
-          float op=hash(fi*5.0+float(j)*3.0)*0.3;
-          col+=vec3(0.0,1.0,0.25)*op*smoothstep(1.5*px,0.0,d);
-          // Packet traveling along edge
-          float pktT=fract(T*0.4+hash(fi*7.0+float(j)*11.0));
-          vec2 pktPos=mix(a,b,pktT);
-          float pktD=length(auv-pktPos);
-          col+=vec3(0.0,1.0,1.0)*0.6*smoothstep(3.0*px,0.0,pktD);
+
+          // L-shaped routing: horizontal then vertical
+          vec2 mid=vec2(b.x,a.y);
+          // Horizontal segment a->mid
+          vec2 pa1=auv-a, ba1=mid-a;
+          float len1=length(ba1);
+          float t1=(len1>0.001)?clamp(dot(pa1,ba1)/(len1*len1),0.0,1.0):0.0;
+          float d1=length(pa1-ba1*t1);
+          // Vertical segment mid->b
+          vec2 pa2=auv-mid, ba2=b-mid;
+          float len2=length(ba2);
+          float t2=(len2>0.001)?clamp(dot(pa2,ba2)/(len2*len2),0.0,1.0):0.0;
+          float d2=length(pa2-ba2*t2);
+          float d=min(d1,d2);
+
+          // Alive/active flicker based on hash
+          float alive=step(0.3,hash(fi*5.0+fj*3.0));
+          float brightness=alive*(0.1+0.05*sin(T*3.0+fi*2.0));
+          col+=vec3(0.0,1.0,0.25)*brightness*smoothstep(1.2*px,0.0,d);
+
+          // Data packets traveling along L-route
+          float totalLen=len1+len2;
+          if(totalLen>0.001 && alive>0.5){
+            // Multiple packets per edge based on rate
+            for(int p=0;p<3;p++){
+              float fp=float(p);
+              float pktPhase=fract(T*speed*0.8+hash(fi*7.0+fj*11.0+fp*13.0)+fp*0.33);
+              float along=pktPhase*totalLen;
+              vec2 pktPos;
+              if(along<len1){
+                pktPos=a+normalize(ba1)*along;
+              } else {
+                pktPos=mid+normalize(ba2)*(along-len1);
+              }
+              float pktD=length(auv-pktPos);
+              vec3 pktCol=(hash(fi*9.0+fp)>0.5)?vec3(0.0,1.0,1.0):vec3(0.0,1.0,0.25);
+              // Brighter, sharper packet
+              col+=pktCol*0.7*smoothstep(2.5*px,0.5*px,pktD);
+            }
+          }
         }
       }
-      // Nodes
+
+      // Nodes — diamond and box shapes, no circles
       for(int i=0;i<20;i++){
         float fi=float(i);
         vec2 np=nodePos(fi)*vec2(aspect,1.0);
-        float d=length(auv-np);
-        float r=(0.006+hash(fi*6.11)*0.008)*(1.0+sin(T*2.0+hash(fi)*6.28)*0.3);
+        vec2 diff=auv-np;
         vec3 nc=nodeColor(fi);
-        // Glow
-        col+=nc*0.1*smoothstep(r+0.03,r,d);
-        // Node body
-        col+=nc*smoothstep(r+px,r-px,d);
+        float sz=0.008+hash(fi*6.11)*0.004;
+        float pulse=1.0+step(0.9,hash(fi*8.8+floor(T*2.0)))*0.4;
+        sz*=pulse;
+
+        float d;
+        // Alternate between diamond and box shapes
+        if(mod(fi,3.0)<1.0){
+          d=sdDiamond(diff,sz);
+        } else {
+          d=sdBox(diff,vec2(sz*0.7));
+        }
+
+        // Sharp outer glow (square falloff)
+        float glow=1.0/(1.0+d*d*80000.0);
+        col+=nc*0.08*glow;
+        // Hard body with 1px AA
+        col+=nc*smoothstep(px,-px,d)*0.9;
+
+        // Activity indicator: blinking dot for "hot" nodes
+        if(hash(fi*12.3)>0.6){
+          float blink=step(0.5,fract(T*2.0+hash(fi)*10.0));
+          float ind=sdBox(diff-vec2(sz+0.006,sz+0.004),vec2(0.002));
+          col+=vec3(1.0,0.0,0.25)*blink*smoothstep(px,0.0,ind)*0.8;
+        }
       }
+
+      // Throughput bar at bottom
+      float barH=0.035;
+      if(uv.y<barH){
+        float fill=0.3+0.3*sin(T*speed*2.0)+0.2*sin(T*speed*5.7);
+        fill=clamp(fill,0.05,0.95);
+        float inBar=step(uv.x,fill);
+        vec3 barCol=mix(vec3(0.0,1.0,0.25),vec3(1.0,0.0,0.25),uv.x);
+        col+=barCol*0.2*inBar;
+        col+=vec3(0.0,0.27,0.0)*0.15*(1.0-inBar);
+        // Separator line
+        col+=vec3(0.0,1.0,0.25)*0.3*smoothstep(1.5*px,0.0,abs(uv.y-barH));
+      }
+
       gl_FragColor=vec4(col,1.0);
     }
-  `);
+  `, {
+    uniforms: ['uRate'],
+    onFrame: function(gl, locs) {
+      gl.uniform1f(locs.uRate, sampleRate);
+    }
+  });
+
+  // --- Control overlay ---
+  const ctrl = document.createElement('div');
+  ctrl.style.cssText = `
+    position:absolute; top:4px; right:4px; z-index:5;
+    background:rgba(0,10,0,0.88); border:1px solid rgba(0,255,65,0.3);
+    padding:5px 8px; font-size:8px; color:#00ff41;
+    font-family:'Share Tech Mono',monospace; pointer-events:auto;
+    box-shadow:0 0 8px rgba(0,255,65,0.1); display:flex; align-items:center; gap:6px;
+  `;
+  ctrl.innerHTML = `
+    <span style="color:#00ffff;letter-spacing:1px;font-size:7px;">SMPL RATE</span>
+    <input type="range" min="0" max="100" value="50"
+      style="width:60px;accent-color:#00ff41;height:2px;cursor:pointer;-webkit-appearance:none;
+      background:linear-gradient(90deg,#003300,#00ff41);border-radius:1px;outline:none;">
+    <span style="min-width:38px;text-align:right;color:#00ffff;font-size:8px;">1.2kHz</span>
+  `;
+  wrapper.appendChild(ctrl);
+
+  const slider = ctrl.querySelector('input');
+  const valSpan = ctrl.querySelector('span:last-child');
+  const freqLabels = ['0.1kHz','0.3kHz','0.6kHz','1.2kHz','2.4kHz','4.8kHz','9.6kHz','19.2k','38.4k','48.0k','96.0k'];
+  slider.addEventListener('input', () => {
+    sampleRate = parseInt(slider.value) / 100;
+    const idx = Math.min(Math.floor(sampleRate * 10), 10);
+    valSpan.textContent = freqLabels[idx];
+  });
 }
 
 // --- GRAPHIC EQ (WebGL) ---
@@ -1690,41 +1818,182 @@ function createWaveform(body) {
 
 // --- LIVE CHART (WebGL) ---
 function createLiveChart(body, opts = {}) {
-  createGLPanel(body, `
-    precision highp float;
-    varying vec2 v;
-    uniform float T;
-    uniform vec2 R;
-    float hash(float n){return fract(sin(n)*43758.5453);}
-    float noise(float x){float i=floor(x);float f=fract(x);return mix(hash(i),hash(i+1.0),f*f*(3.0-2.0*f));}
-    float fbm(float x){return noise(x)*0.5+noise(x*2.0)*0.3+noise(x*4.0)*0.2;}
-    void main(){
-      vec2 uv=v; float px=1.0/R.y;
-      vec3 col=vec3(0.0);
-      // Grid
-      float gy=step(mod(uv.y*5.0,1.0),0.005*5.0);
-      col+=vec3(0.0,0.27,0.0)*gy*0.3;
-      // 3 data lines: green, cyan, red — scrolling procedural noise
-      float scroll=T*0.3;
-      float x=uv.x*8.0+scroll;
-      // Line 1: green throughput
-      float v1=0.3+fbm(x*1.1+10.0)*0.5;
-      float d1=uv.y-v1;
-      col+=vec3(0.0,1.0,0.25)*0.9*smoothstep(2.5*px,0.0,abs(d1));
-      col+=vec3(0.0,1.0,0.25)*0.05*smoothstep(0.0,0.001,d1)*smoothstep(d1,0.0,-0.3); // fill below
-      // Line 2: cyan latency
-      float v2=0.4+fbm(x*1.3+50.0)*0.4;
-      float d2=uv.y-v2;
-      col+=vec3(0.0,1.0,1.0)*0.7*smoothstep(2.0*px,0.0,abs(d2));
-      col+=vec3(0.0,1.0,1.0)*0.04*smoothstep(0.0,0.001,d2)*smoothstep(d2,0.0,-0.3);
-      // Line 3: red errors
-      float v3=0.15+fbm(x*1.7+90.0)*0.25;
-      float d3=uv.y-v3;
-      col+=vec3(1.0,0.0,0.25)*0.5*smoothstep(2.0*px,0.0,abs(d3));
-      col+=vec3(1.0,0.0,0.25)*0.03*smoothstep(0.0,0.001,d3)*smoothstep(d3,0.0,-0.2);
-      gl_FragColor=vec4(col,1.0);
+  const wrapper = document.createElement('div');
+  wrapper.style.cssText = 'width:100%;height:100%;position:relative;overflow:hidden;';
+  body.appendChild(wrapper);
+
+  // --- D3 SVG setup ---
+  const margin = { top: 6, right: 54, bottom: 18, left: 32 };
+  const svg = d3.select(wrapper).append('svg')
+    .attr('width', '100%').attr('height', '100%')
+    .style('position', 'absolute').style('top', '0').style('left', '0');
+
+  const defs = svg.append('defs');
+  // Glow filter
+  const glow = defs.append('filter').attr('id', 'chartGlow').attr('x', '-20%').attr('y', '-20%').attr('width', '140%').attr('height', '140%');
+  glow.append('feGaussianBlur').attr('stdDeviation', '2').attr('result', 'blur');
+  const merge = glow.append('feMerge');
+  merge.append('feMergeNode').attr('in', 'blur');
+  merge.append('feMergeNode').attr('in', 'SourceGraphic');
+
+  const g = svg.append('g');
+
+  // Data
+  const maxPts = 200;
+  const seriesDef = [
+    { key: 'bw',   color: '#00ff41', fillColor: 'rgba(0,255,65,0.07)',  label: 'BW',   base: 0.45, amp: 0.35, spike: 0.10 },
+    { key: 'pkt',  color: '#00ffff', fillColor: 'rgba(0,255,255,0.05)', label: 'PKT',  base: 0.35, amp: 0.25, spike: 0.07 },
+    { key: 'drop', color: '#ff0040', fillColor: null,                    label: 'DROP', base: 0.12, amp: 0.12, spike: 0.18 },
+  ];
+  const data = [];
+  let tick = 0;
+  // Pre-fill
+  for (let i = 0; i < maxPts; i++) {
+    const pt = { t: i };
+    for (const s of seriesDef) {
+      pt[s.key] = s.base + (Math.random() - 0.3) * s.amp;
     }
-  `);
+    data.push(pt);
+    tick = i;
+  }
+
+  // Scales
+  const x = d3.scaleLinear();
+  const y = d3.scaleLinear().domain([0, 1]);
+
+  // Axes
+  const xAxisG = g.append('g').attr('class', 'd3-axis');
+  const yAxisG = g.append('g').attr('class', 'd3-axis');
+
+  // Grid
+  const gridG = g.append('g');
+
+  // Area + line groups per series (draw order: drop, pkt, bw)
+  const drawOrder = [2, 1, 0];
+  const areas = [], lines = [], dots = [], labels = [], dashLines = [];
+  for (let i = 0; i < seriesDef.length; i++) {
+    const s = seriesDef[i];
+    if (s.fillColor) {
+      areas[i] = g.append('path').attr('fill', s.fillColor).attr('stroke', 'none');
+    }
+    lines[i] = g.append('path').attr('fill', 'none').attr('stroke', s.color)
+      .attr('stroke-width', 1.5).attr('filter', 'url(#chartGlow)');
+    dashLines[i] = g.append('line').attr('stroke', s.color).attr('stroke-width', 0.5)
+      .attr('stroke-dasharray', '3,3').attr('opacity', 0.4);
+    dots[i] = g.append('circle').attr('r', 3).attr('fill', s.color)
+      .attr('filter', 'url(#chartGlow)');
+    labels[i] = g.append('text').attr('fill', s.color)
+      .attr('font-size', '9px').attr('font-family', 'Share Tech Mono, monospace');
+  }
+
+  // Speed
+  let speed = 50;
+  let lastPush = 0;
+
+  function pushSample(now) {
+    if (now - lastPush < speed) return;
+    lastPush = now;
+    tick++;
+    const pt = { t: tick };
+    for (const s of seriesDef) {
+      const prev = data[data.length - 1][s.key];
+      let next = prev + (Math.random() - 0.48) * s.amp * 0.4;
+      if (Math.random() < s.spike) next += (Math.random() - 0.3) * s.amp * 1.5;
+      next += (s.base - next) * 0.03;
+      pt[s.key] = Math.max(0.02, Math.min(0.98, next));
+    }
+    data.push(pt);
+    if (data.length > maxPts) data.shift();
+  }
+
+  function render(now) {
+    if (!document.body.contains(wrapper)) return;
+    const W = wrapper.clientWidth;
+    const H = wrapper.clientHeight;
+    if (W === 0 || H === 0) { requestAnimationFrame(render); return; }
+
+    pushSample(now);
+
+    const w = W - margin.left - margin.right;
+    const h = H - margin.top - margin.bottom;
+    g.attr('transform', `translate(${margin.left},${margin.top})`);
+
+    // Update scales
+    const tMin = data[0].t, tMax = data[data.length - 1].t;
+    x.domain([tMin, tMax]).range([0, w]);
+    y.range([h, 0]);
+
+    // Grid lines
+    const yTicks = y.ticks(5);
+    const gridSel = gridG.selectAll('line.hgrid').data(yTicks);
+    gridSel.enter().append('line').attr('class', 'hgrid')
+      .attr('stroke', '#003b00').attr('stroke-width', 0.5)
+      .merge(gridSel)
+      .attr('x1', 0).attr('x2', w).attr('y1', d => y(d)).attr('y2', d => y(d));
+    gridSel.exit().remove();
+
+    // Y axis
+    const yAxis = d3.axisLeft(y).ticks(5).tickFormat(d => (d * 100).toFixed(0) + '%').tickSize(0);
+    yAxisG.call(yAxis);
+    yAxisG.selectAll('text').attr('fill', '#005500').attr('font-size', '7px').attr('font-family', 'Share Tech Mono, monospace');
+    yAxisG.selectAll('.domain').attr('stroke', '#004400');
+
+    // X axis (time ticks)
+    const xAxis = d3.axisBottom(x).ticks(6).tickFormat(d => '-' + (tMax - d).toFixed(0)).tickSize(0);
+    xAxisG.attr('transform', `translate(0,${h})`).call(xAxis);
+    xAxisG.selectAll('text').attr('fill', '#005500').attr('font-size', '7px').attr('font-family', 'Share Tech Mono, monospace');
+    xAxisG.selectAll('.domain').attr('stroke', '#004400');
+
+    // Line + area generators
+    for (const si of drawOrder) {
+      const s = seriesDef[si];
+      const lineGen = d3.line().x(d => x(d.t)).y(d => y(d[s.key]));
+      lines[si].attr('d', lineGen(data));
+
+      if (areas[si]) {
+        const areaGen = d3.area().x(d => x(d.t)).y0(h).y1(d => y(d[s.key]));
+        areas[si].attr('d', areaGen(data));
+      }
+
+      // Current value indicators
+      const last = data[data.length - 1];
+      const lx = x(last.t), ly = y(last[s.key]);
+      dots[si].attr('cx', lx).attr('cy', ly);
+      dashLines[si].attr('x1', w * 0.6).attr('y1', ly).attr('x2', lx).attr('y2', ly);
+      labels[si].attr('x', w + 4).attr('y', ly + 3).text(s.label + ' ' + (last[s.key] * 100).toFixed(0) + '%');
+    }
+
+    requestAnimationFrame(render);
+  }
+  requestAnimationFrame(render);
+
+  // --- SMPL RATE control ---
+  const ctrl = document.createElement('div');
+  ctrl.style.cssText = `
+    position:absolute; top:4px; right:4px; z-index:5;
+    background:rgba(0,10,0,0.88); border:1px solid rgba(0,255,65,0.3);
+    padding:5px 8px; font-size:8px; color:#00ff41;
+    font-family:'Share Tech Mono',monospace; pointer-events:auto;
+    box-shadow:0 0 8px rgba(0,255,65,0.1); display:flex; align-items:center; gap:6px;
+  `;
+  ctrl.innerHTML = `
+    <span style="color:#00ffff;letter-spacing:1px;font-size:7px;">SMPL RATE</span>
+    <input type="range" min="0" max="100" value="50"
+      style="width:60px;accent-color:#00ff41;height:2px;cursor:pointer;-webkit-appearance:none;
+      background:linear-gradient(90deg,#003300,#00ff41);border-radius:1px;outline:none;">
+    <span style="min-width:38px;text-align:right;color:#00ffff;font-size:8px;">1.2kHz</span>
+  `;
+  wrapper.appendChild(ctrl);
+
+  const slider = ctrl.querySelector('input');
+  const valSpan = ctrl.querySelector('span:last-child');
+  const freqLabels = ['0.1kHz','0.3kHz','0.6kHz','1.2kHz','2.4kHz','4.8kHz','9.6kHz','19.2k','38.4k','48.0k','96.0k'];
+  slider.addEventListener('input', () => {
+    const pct = parseInt(slider.value) / 100;
+    speed = Math.round(200 - pct * 192);
+    const idx = Math.min(Math.floor(pct * 10), 10);
+    valSpan.textContent = freqLabels[idx];
+  });
 }
 
 // --- HEX DUMP ---
@@ -2872,7 +3141,7 @@ function initAll() {
   // Layout - tiled
   const layouts = [
     { id: 'p-terminal', title: '◆ TERMINAL // root@nexus', x: 0, y: 0, w: ww*0.3, h: wh*0.4, init: createTerminal, tabs: ['BASH', 'ZSH', 'PYTHON'] },
-    { id: 'p-netgraph', title: '◆ NETWORK TOPOLOGY', x: ww*0.3, y: 0, w: ww*0.35, h: wh*0.4, init: createNetworkGraph },
+    { id: 'p-netgraph', title: '◆ NET TRAFFIC MONITOR', x: ww*0.3, y: 0, w: ww*0.35, h: wh*0.4, init: createNetworkGraph },
     { id: 'p-worldmap', title: '◆ GLOBAL THREAT MAP', x: ww*0.65, y: 0, w: ww*0.35, h: wh*0.4, init: createWorldMap },
     { id: 'p-logs', title: '◆ SYSTEM LOGS', x: 0, y: wh*0.4, w: ww*0.22, h: wh*0.3, init: createLogFeed },
     { id: 'p-eq', title: '◆ AUDIO INTERCEPT // EQ', x: ww*0.22, y: wh*0.4, w: ww*0.18, h: wh*0.15, init: createEQ },
