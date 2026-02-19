@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>H4CK3R C0NS0L3 // 31337 OPS</title>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&family=Nixie+One&display=swap');
 
   :root {
     --green: #00ff41;
@@ -610,6 +610,7 @@
 </head>
 <body>
 <canvas id="matrix-bg"></canvas>
+<canvas id="intro-canvas" style="position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:200000;"></canvas>
 
 <div id="boot-screen">
   <div id="boot-text"></div>
@@ -764,6 +765,361 @@ const macAddr = () => Array.from({length:6}, () => hex()).join(':');
 const uuid = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
   const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
 });
+
+// --- MATRIX ZOOM INTRO (The Matrix camera-into-zero scene) ---
+async function matrixIntro() {
+  const canvas = document.getElementById('intro-canvas');
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+
+  const W = () => window.innerWidth;
+  const H = () => window.innerHeight;
+
+  function resizeCanvas() {
+    canvas.width = W() * dpr;
+    canvas.height = H() * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  resizeCanvas();
+
+  // Katakana + digits (no slashed zero — we use 'O')
+  const glyphs = 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン123456789ABCDEF';
+  const glyphArr = [...glyphs];
+  const pick = () => glyphArr[Math.floor(Math.random() * glyphArr.length)];
+
+  const cellW = 16, cellH = 20;
+  const baseFontSize = cellH - 4;
+  const cols = Math.ceil(W() / cellW) + 4;
+  const rows = Math.ceil(H() / cellH) + 4;
+  const trailLen = 30;
+
+  // Build columns
+  const streams = [];
+  for (let c = 0; c < cols; c++) {
+    streams.push({
+      chars: Array.from({ length: rows }, () => pick()),
+      head: Math.floor(Math.random() * -rows),
+      baseSpeed: 0.15 + Math.random() * 0.55,
+      brightness: 0.5 + Math.random() * 0.5,
+    });
+  }
+
+  // Target zero — placed at the exact cell whose center is closest to screen center.
+  // This means tX ≈ w/2 and tY ≈ h/2, so NO panning is needed during zoom.
+  const tCol = Math.round((W() / 2 - cellW / 2) / cellW);
+  const tRow = Math.round((H() / 2 - cellH / 2) / cellH);
+  streams[tCol].chars[tRow] = 'O';
+  // Position head so it arrives at tRow after ~2s of animation
+  streams[tCol].head = tRow - 48;
+  streams[tCol].baseSpeed = 0.4;
+
+  // Zoom target: exact center of the cell where the O is drawn
+  const tX = tCol * cellW + cellW / 2;
+  const tY = tRow * cellH + cellH / 2;
+
+  // Timeline — zoom starts early, rain keeps going, hold on the O, then cut
+  const PHASE_RAIN_FULL = 2.0;  // full-speed rain before anything else
+  const PHASE_ZOOM_START = 2.0; // zoom begins (overlaps with rain)
+  const PHASE_RAIN_END = 10.0;  // non-target columns keep animating until here
+  const PHASE_ZOOM_END = 20.0;  // zoom stops — O fills most of the screen
+  const PHASE_HOLD_END = 22.0;  // hold on the glowing O with CRT scanlines
+  const PHASE_FADE_END = 22.5;  // quick cut to black → boot
+
+  const t0 = performance.now();
+
+  // ---- Helper: render the full rain scene at a given scale/offset ----
+  // Re-renders every frame so the O stays crisp at any zoom level.
+  // glowAmount: 0-1 controls how much the target O glows
+  function renderRain(w, h, scale, cx, cy, glowAmount) {
+    if (glowAmount === undefined) glowAmount = 0;
+    ctx.save();
+    ctx.translate(w / 2, h / 2);
+    ctx.scale(scale, scale);
+    ctx.translate(-cx, -cy);
+
+    // Background: solid black (no trails needed when re-rendering)
+    const visW = w / scale, visH = h / scale;
+    const left = cx - visW / 2, top = cy - visH / 2;
+    ctx.fillStyle = '#000';
+    ctx.fillRect(left - cellW, top - cellH, visW + cellW * 2, visH + cellH * 2);
+
+    // Only draw columns/rows that are visible in the current viewport
+    const cMin = Math.max(0, Math.floor(left / cellW) - 1);
+    const cMax = Math.min(cols - 1, Math.ceil((left + visW) / cellW) + 1);
+    const rMin = Math.max(0, Math.floor(top / cellH) - 1);
+    const rMax = Math.min(rows - 1, Math.ceil((top + visH) / cellH) + 1);
+
+    // Font size — always baseFontSize in world-space (canvas scales it up)
+    ctx.font = `${baseFontSize}px 'Share Tech Mono', monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    // Always ensure the target O cell is within the draw range
+    const drawCMin = Math.min(cMin, tCol);
+    const drawCMax = Math.max(cMax, tCol);
+    const drawRMin = Math.min(rMin, tRow);
+    const drawRMax = Math.max(rMax, tRow);
+
+    for (let c = drawCMin; c <= drawCMax; c++) {
+      const s = streams[c];
+      for (let r = drawRMin; r <= drawRMax; r++) {
+        const isTarget = (c === tCol && r === tRow);
+        // Skip non-target chars outside the visible viewport
+        if (!isTarget && (c < cMin || c > cMax || r < rMin || r > rMax)) continue;
+        const dist = s.head - r;
+
+        // Target O: always drawn once the head has reached it (dist >= -0.5)
+        // Other chars: only drawn within the trail window
+        if (!isTarget && (dist < -0.5 || dist > trailLen)) continue;
+        if (isTarget && dist < -0.5) continue; // not yet reached
+
+        const px = c * cellW + cellW / 2;
+        const py = r * cellH + cellH / 2;
+
+        if (isTarget) {
+          // Nixie One font for a round, warm, retro-tube zero
+          if (glowAmount > 0) {
+            ctx.shadowColor = '#00ff41';
+            ctx.shadowBlur = 8 + glowAmount * 50;
+          }
+          const gb = Math.floor(200 + 55 * glowAmount);
+          const rr = Math.floor(80 + 175 * glowAmount);
+          ctx.fillStyle = glowAmount > 0
+            ? `rgb(${rr},${gb},${Math.floor(100 + 155 * glowAmount)})`
+            : 'rgba(190,255,190,1)';
+
+          // Use Nixie One for the target zero — rounder, more expressive
+          ctx.font = `${baseFontSize * 0.85}px 'Nixie One', serif`;
+
+          // Multi-pass bloom for glow
+          const passes = glowAmount > 0.3 ? 3 : glowAmount > 0.1 ? 2 : 1;
+          for (let p = 0; p < passes; p++) {
+            ctx.fillText('0', px, py);
+          }
+
+          // Reset shadow & font
+          if (glowAmount > 0) {
+            ctx.shadowBlur = 0;
+            ctx.shadowColor = 'transparent';
+          }
+          ctx.font = `${baseFontSize}px 'Share Tech Mono', monospace`;
+          continue;
+        } else if (dist < 0.5 && dist >= -0.5) {
+          ctx.fillStyle = 'rgba(190,255,190,1)';
+        } else {
+          const fade = Math.max(0, 1 - dist / trailLen);
+          const g = Math.floor(130 + 125 * fade);
+          const a = fade * s.brightness;
+          ctx.fillStyle = `rgba(5,${g},15,${a})`;
+        }
+        ctx.fillText(s.chars[r], px, py);
+      }
+    }
+
+    ctx.restore();
+  }
+
+  // ---- Main draw function ----
+  function drawFrame(now) {
+    const sec = (now - t0) / 1000;
+    if (sec >= PHASE_FADE_END) return;
+
+    const w = W(), h = H();
+    resizeCanvas();
+
+    // ---- Advance rain simulation ----
+    // Non-target columns keep animating throughout the zoom until PHASE_RAIN_END
+    // Target column freezes once zoom starts
+    if (sec < PHASE_RAIN_END) {
+      // Gradually decelerate rain as zoom progresses
+      let speedMul = 1.0;
+      if (sec > PHASE_ZOOM_START) {
+        const dt = (sec - PHASE_ZOOM_START) / (PHASE_RAIN_END - PHASE_ZOOM_START);
+        speedMul = Math.max(0, 1.0 - dt * dt);
+      }
+
+      for (let c = 0; c < cols; c++) {
+        // Target column freezes once zoom begins
+        if (c === tCol && sec >= PHASE_ZOOM_START) continue;
+
+        const s = streams[c];
+        s.head += s.baseSpeed * speedMul;
+
+        if (s.head > rows + trailLen) {
+          s.head = -trailLen - Math.random() * rows * 0.5;
+          for (let r = 0; r < rows; r++) {
+            if (c === tCol && r === tRow) continue;
+            s.chars[r] = pick();
+          }
+        }
+
+        // Char cycling while still moving
+        if (speedMul > 0.05 && Math.random() > 0.9) {
+          const ri = Math.floor(Math.random() * rows);
+          if (!(c === tCol && ri === tRow)) s.chars[ri] = pick();
+        }
+      }
+    }
+
+    // ---- Compute zoom level & render ----
+    let scale = 1.0;
+
+    if (sec < PHASE_ZOOM_END) {
+      const fadeIn = Math.min(1, sec / 0.8);
+
+      // Zoom ramps up from PHASE_ZOOM_START
+      let zt = 0, ease = 0;
+      if (sec >= PHASE_ZOOM_START) {
+        zt = (sec - PHASE_ZOOM_START) / (PHASE_ZOOM_END - PHASE_ZOOM_START);
+        // Quadratic ease-in: starts slow, accelerates to constant speed
+        // Integral of a linear speed ramp: ease = zt² for zt<0.5, then linear for the rest
+        // This keeps mid and end at the same perceived speed
+        if (zt < 0.3) {
+          // Quadratic ramp: speed goes from 0 → full over first 30%
+          ease = (zt * zt) / (2 * 0.3);
+        } else {
+          // Linear from here — matched so it's continuous
+          ease = (0.3 / 2) + (zt - 0.3);
+        }
+      }
+
+      // Cap zoom so the O fills ~70% of screen height (stays visible)
+      const maxScale = (h * 12) / cellH;
+      scale = ease > 0 ? Math.pow(maxScale, ease) : 1;
+
+      // Glow ramps up with zoom
+      const glowAmount = ease > 0 ? Math.min(1, ease * 1.5) : 0;
+
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, w, h);
+
+      renderRain(w, h, scale, tX, tY, glowAmount);
+
+      // Fade in overlay
+      if (fadeIn < 1) {
+        ctx.fillStyle = `rgba(0,0,0,${1 - fadeIn})`;
+        ctx.fillRect(0, 0, w, h);
+      }
+
+      // Radial glow highlight around the O (early zoom)
+      if (ease > 0 && ease < 0.3) {
+        const gr = ctx.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, 40 / scale);
+        gr.addColorStop(0, `rgba(0,255,65,${0.2 * (ease / 0.3)})`);
+        gr.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = gr;
+        ctx.fillRect(0, 0, w, h);
+      }
+
+      // Vignette (intensifies with zoom)
+      if (ease > 0.05) {
+        const vg = ctx.createRadialGradient(w / 2, h / 2, w * 0.15, w / 2, h / 2, w * 0.6);
+        vg.addColorStop(0, 'rgba(0,0,0,0)');
+        vg.addColorStop(1, `rgba(0,0,0,${0.15 + ease * 0.55})`);
+        ctx.fillStyle = vg;
+        ctx.fillRect(0, 0, w, h);
+      }
+
+      // CRT scanlines — thick dark bands with phosphor-green gaps
+      if (zt > 0.1) {
+        const scanT = Math.min(1, (zt - 0.1) / 0.7);
+        const scanSpacing = Math.max(3, Math.floor(3 + scanT * 5));
+        const scanThick = Math.max(1, Math.floor(1 + scanT * 2.5));
+        const scanAlpha = 0.15 + scanT * 0.55;
+
+        // Dark scan bands
+        ctx.fillStyle = `rgba(0,0,0,${scanAlpha})`;
+        for (let sy = 0; sy < h; sy += scanSpacing) {
+          ctx.fillRect(0, sy, w, scanThick);
+        }
+
+        // Subtle green phosphor glow between scanlines
+        if (scanT > 0.3) {
+          const phosphorAlpha = (scanT - 0.3) * 0.08;
+          ctx.fillStyle = `rgba(0,255,65,${phosphorAlpha})`;
+          for (let sy = scanThick; sy < h; sy += scanSpacing) {
+            ctx.fillRect(0, sy, w, Math.max(1, scanSpacing - scanThick));
+          }
+        }
+
+        // Horizontal beam flicker
+        if (scanT > 0.4) {
+          const beamY = (sec * 60) % h;
+          const beamAlpha = (scanT - 0.4) * 0.12;
+          const beamH = 30 + scanT * 50;
+          const beamGrad = ctx.createLinearGradient(0, beamY - beamH / 2, 0, beamY + beamH / 2);
+          beamGrad.addColorStop(0, 'rgba(0,255,65,0)');
+          beamGrad.addColorStop(0.5, `rgba(0,255,65,${beamAlpha})`);
+          beamGrad.addColorStop(1, 'rgba(0,255,65,0)');
+          ctx.fillStyle = beamGrad;
+          ctx.fillRect(0, beamY - beamH / 2, w, beamH);
+        }
+      }
+    }
+
+    // ---- HOLD PHASE: sit on the glowing O with CRT scanlines ----
+    else if (sec < PHASE_HOLD_END) {
+      // Render at final zoom scale with full glow
+      const maxScale = (h * 12) / cellH;
+
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, w, h);
+
+      renderRain(w, h, maxScale, tX, tY, 1.0);
+
+      // Vignette
+      const vg = ctx.createRadialGradient(w / 2, h / 2, w * 0.15, w / 2, h / 2, w * 0.6);
+      vg.addColorStop(0, 'rgba(0,0,0,0)');
+      vg.addColorStop(1, 'rgba(0,0,0,0.7)');
+      ctx.fillStyle = vg;
+      ctx.fillRect(0, 0, w, h);
+
+      // Heavy CRT scanlines
+      const scanSpacing = 8;
+      const scanThick = 3;
+      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      for (let sy = 0; sy < h; sy += scanSpacing) {
+        ctx.fillRect(0, sy, w, scanThick);
+      }
+
+      // Green phosphor between scanlines
+      ctx.fillStyle = 'rgba(0,255,65,0.03)';
+      for (let sy = scanThick; sy < h; sy += scanSpacing) {
+        ctx.fillRect(0, sy, w, scanSpacing - scanThick);
+      }
+
+      // Drifting beam
+      const beamY = (sec * 60) % h;
+      const beamGrad = ctx.createLinearGradient(0, beamY - 40, 0, beamY + 40);
+      beamGrad.addColorStop(0, 'rgba(0,255,65,0)');
+      beamGrad.addColorStop(0.5, 'rgba(0,255,65,0.07)');
+      beamGrad.addColorStop(1, 'rgba(0,255,65,0)');
+      ctx.fillStyle = beamGrad;
+      ctx.fillRect(0, beamY - 40, w, 80);
+    }
+
+    // ---- CUT TO BLACK → BOOT ----
+    else {
+      const ft = (sec - PHASE_HOLD_END) / (PHASE_FADE_END - PHASE_HOLD_END);
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, w, h);
+      canvas.style.opacity = 1 - ft;
+    }
+  }
+
+  return new Promise(resolve => {
+    function tick(now) {
+      const sec = (now - t0) / 1000;
+      if (sec >= PHASE_FADE_END) {
+        canvas.style.display = 'none';
+        resolve();
+        return;
+      }
+      drawFrame(now);
+      requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+  });
+}
 
 // --- BOOT SEQUENCE ---
 const bootLines = [
@@ -3550,7 +3906,10 @@ notify = function(msg, type) {
 
 // --- START ---
 initMatrix();
-bootSequence();
+(async () => {
+  await matrixIntro();
+  bootSequence();
+})();
 </script>
 </body>
 </html>
