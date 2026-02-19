@@ -305,7 +305,7 @@
     width: 100vw;
     height: 100vh;
     z-index: -1;
-    opacity: 0.06;
+    opacity: 0.12;
   }
 
   /* EQ BARS */
@@ -827,33 +827,248 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // --- MATRIX RAIN BACKGROUND ---
 function initMatrix() {
   const canvas = $('#matrix-bg');
-  const ctx = canvas.getContext('2d');
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
 
-  const cols = Math.floor(canvas.width / 14);
-  const drops = Array.from({length: cols}, () => randInt(0, canvas.height));
-  const chars = 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン0123456789ABCDEF'.split('');
+  // --- WebGL setup ---
+  const gl = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: false }) ||
+             canvas.getContext('experimental-webgl', { alpha: true, premultipliedAlpha: false });
+  if (!gl) { console.warn('WebGL not available for matrix rain'); return; }
 
-  function draw() {
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = '#00ff41';
-    ctx.font = '13px monospace';
+  // --- Build glyph atlas texture from canvas ---
+  // Render katakana + half-width kana + digits into a sprite sheet
+  const GLYPH_CHARS = 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲンABCDEF0123456789ﾊﾐﾋｰｳｼﾅﾓﾆｻﾜﾂｵﾘｱﾎﾃﾏｹﾒｴｶｷﾑﾕﾗｾﾈｽ';
+  const GLYPH_SIZE = 32;
+  const ATLAS_COLS = 16;
+  const ATLAS_ROWS = Math.ceil(GLYPH_CHARS.length / ATLAS_COLS);
+  const atlasCanvas = document.createElement('canvas');
+  atlasCanvas.width = ATLAS_COLS * GLYPH_SIZE;
+  atlasCanvas.height = ATLAS_ROWS * GLYPH_SIZE;
+  const actx = atlasCanvas.getContext('2d');
+  actx.fillStyle = '#000';
+  actx.fillRect(0, 0, atlasCanvas.width, atlasCanvas.height);
+  actx.fillStyle = '#fff';
+  actx.font = `${GLYPH_SIZE * 0.75}px monospace`;
+  actx.textAlign = 'center';
+  actx.textBaseline = 'middle';
+  for (let i = 0; i < GLYPH_CHARS.length; i++) {
+    const col = i % ATLAS_COLS;
+    const row = Math.floor(i / ATLAS_COLS);
+    actx.fillText(GLYPH_CHARS[i], col * GLYPH_SIZE + GLYPH_SIZE / 2, row * GLYPH_SIZE + GLYPH_SIZE / 2);
+  }
 
-    for (let i = 0; i < drops.length; i++) {
-      ctx.fillText(pick(chars), i * 14, drops[i]);
-      if (drops[i] > canvas.height && Math.random() > 0.975) drops[i] = 0;
-      drops[i] += 14;
+  // Upload atlas as WebGL texture
+  const atlasTexture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, atlasTexture);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, atlasCanvas);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+  // --- Create column data texture ---
+  // Each column gets: speed, offset, brightness variation, character cycling speed
+  const NUM_COLS = 128;
+  const colData = new Float32Array(NUM_COLS * 4);
+  for (let i = 0; i < NUM_COLS; i++) {
+    colData[i * 4 + 0] = 0.3 + Math.random() * 1.2;   // speed
+    colData[i * 4 + 1] = Math.random() * 100.0;        // time offset (randomizes start)
+    colData[i * 4 + 2] = 0.4 + Math.random() * 0.6;   // brightness multiplier
+    colData[i * 4 + 3] = 0.5 + Math.random() * 2.0;   // char cycle speed
+  }
+
+  // Pack into a texture (NUM_COLS x 1, RGBA float via UNSIGNED_BYTE encoding)
+  // We'll pass as a uniform array instead for simplicity
+  // Actually, let's use the shader's built-in hash for per-column randomness - more elegant
+
+  // --- Shaders ---
+  const vertSrc = `
+    attribute vec2 aPosition;
+    varying vec2 vUv;
+    void main() {
+      vUv = aPosition * 0.5 + 0.5;
+      gl_Position = vec4(aPosition, 0.0, 1.0);
     }
+  `;
+
+  const fragSrc = `
+    precision highp float;
+    varying vec2 vUv;
+    uniform float uTime;
+    uniform vec2 uResolution;
+    uniform sampler2D uAtlas;
+    uniform float uAtlasCols;
+    uniform float uAtlasRows;
+    uniform float uNumGlyphs;
+
+    // Hash functions for pseudo-random per-column values
+    float hash(float n) { return fract(sin(n) * 43758.5453123); }
+    float hash2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+
+    void main() {
+      // Grid dimensions
+      float cellSize = 14.0;  // pixel size of each character cell
+      vec2 pixelPos = vUv * uResolution;
+
+      float col = floor(pixelPos.x / cellSize);
+      float row = floor(pixelPos.y / cellSize);
+      float totalCols = floor(uResolution.x / cellSize);
+      float totalRows = floor(uResolution.y / cellSize);
+
+      // Per-column random properties
+      float colSeed = col + 0.5;
+      float speed      = 0.4 + hash(colSeed * 1.17) * 1.5;          // fall speed
+      float offset     = hash(colSeed * 2.31) * 80.0;               // start offset
+      float brightness = 0.5 + hash(colSeed * 3.47) * 0.5;          // base brightness
+      float cycleSpeed = 1.0 + hash(colSeed * 4.59) * 3.0;          // character change rate
+      float trailLen   = 12.0 + hash(colSeed * 5.73) * 22.0;        // trail length in cells
+      float depth      = 0.3 + hash(colSeed * 6.11) * 0.7;          // depth layer (dimming)
+
+      // Which "head" position in this column (wrapping)
+      float headPos = mod(uTime * speed + offset, totalRows + trailLen + 8.0);
+
+      // Distance from head (0 = head, positive = behind/above)
+      float distFromHead = headPos - row;
+
+      // Trail fade: bright at head, fading behind
+      float trail = 0.0;
+      if (distFromHead >= 0.0 && distFromHead < trailLen) {
+        trail = 1.0 - (distFromHead / trailLen);
+        // Sharper falloff curve for more Matrix-like look
+        trail = trail * trail;
+      }
+
+      // Head glow: extra bright white-ish at the very tip
+      float headGlow = 0.0;
+      if (distFromHead >= 0.0 && distFromHead < 1.5) {
+        headGlow = 1.0 - distFromHead / 1.5;
+        headGlow = headGlow * headGlow * headGlow;
+      }
+
+      // Character selection: changes over time for each cell
+      float charIndex = mod(
+        floor(hash2(vec2(col, row)) * uNumGlyphs + uTime * cycleSpeed),
+        uNumGlyphs
+      );
+      // Head chars change faster for that "decoding" effect
+      if (distFromHead >= 0.0 && distFromHead < 3.0) {
+        charIndex = mod(floor(hash(col * 17.0 + row * 31.0 + uTime * 12.0) * uNumGlyphs), uNumGlyphs);
+      }
+
+      // UV into the glyph atlas
+      float glyphCol = mod(charIndex, uAtlasCols);
+      float glyphRow = floor(charIndex / uAtlasCols);
+
+      vec2 cellUv = fract(pixelPos / cellSize);
+      // Flip Y for proper glyph orientation
+      cellUv.y = 1.0 - cellUv.y;
+      // Add some padding to avoid bleeding
+      cellUv = cellUv * 0.85 + 0.075;
+
+      vec2 atlasUv = vec2(
+        (glyphCol + cellUv.x) / uAtlasCols,
+        (glyphRow + cellUv.y) / uAtlasRows
+      );
+
+      float glyphAlpha = texture2D(uAtlas, atlasUv).r;
+
+      // Combine: trail brightness × glyph shape × depth
+      float alpha = trail * glyphAlpha * brightness * depth;
+
+      // Color: green base, whiter at the head
+      vec3 green = vec3(0.0, 1.0, 0.25);
+      vec3 white = vec3(0.75, 1.0, 0.85);
+      vec3 color = mix(green, white, headGlow * 0.8);
+
+      // Add extra luminance at the head
+      alpha += headGlow * glyphAlpha * 0.7;
+
+      // Occasional "bright flash" columns (randomly)
+      float flashPhase = sin(uTime * 0.3 + col * 0.7);
+      if (flashPhase > 0.97) {
+        alpha *= 1.5;
+        color = mix(color, white, 0.3);
+      }
+
+      // Subtle scanline darkening on even rows
+      float scanline = 0.92 + 0.08 * mod(row, 2.0);
+      alpha *= scanline;
+
+      gl_FragColor = vec4(color * alpha, alpha);
+    }
+  `;
+
+  // --- Compile shaders ---
+  function compileShader(src, type) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+      return null;
+    }
+    return s;
+  }
+
+  const vertShader = compileShader(vertSrc, gl.VERTEX_SHADER);
+  const fragShader = compileShader(fragSrc, gl.FRAGMENT_SHADER);
+  const program = gl.createProgram();
+  gl.attachShader(program, vertShader);
+  gl.attachShader(program, fragShader);
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(program));
+    return;
+  }
+  gl.useProgram(program);
+
+  // --- Full-screen quad ---
+  const quad = new Float32Array([-1,-1, 1,-1, -1,1, 1,1]);
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, quad, gl.STATIC_DRAW);
+  const aPos = gl.getAttribLocation(program, 'aPosition');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  // --- Uniforms ---
+  const uTime = gl.getUniformLocation(program, 'uTime');
+  const uRes = gl.getUniformLocation(program, 'uResolution');
+  const uAtlas = gl.getUniformLocation(program, 'uAtlas');
+  const uAtlasCols = gl.getUniformLocation(program, 'uAtlasCols');
+  const uAtlasRows = gl.getUniformLocation(program, 'uAtlasRows');
+  const uNumGlyphs = gl.getUniformLocation(program, 'uNumGlyphs');
+
+  gl.uniform1i(uAtlas, 0);
+  gl.uniform1f(uAtlasCols, ATLAS_COLS);
+  gl.uniform1f(uAtlasRows, ATLAS_ROWS);
+  gl.uniform1f(uNumGlyphs, GLYPH_CHARS.length);
+
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, atlasTexture);
+
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+  // --- Resize handling ---
+  function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    gl.viewport(0, 0, canvas.width, canvas.height);
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  // --- Render loop ---
+  const startTime = Date.now();
+  function draw() {
+    const t = (Date.now() - startTime) / 1000.0;
+    gl.uniform1f(uTime, t);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     requestAnimationFrame(draw);
   }
   draw();
-
-  window.addEventListener('resize', () => {
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-  });
 }
 
 // --- PANEL MANAGEMENT ---
