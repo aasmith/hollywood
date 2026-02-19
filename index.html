@@ -2003,18 +2003,140 @@ function createWorldMap(body) {
     );
   }
 
+  // --- Depth-fade shader for coastlines ---
+  // Vertices on the far side of the globe (facing away from camera) dim out
+  const depthFadeVertexShader = `
+    varying vec3 vWorldPosition;
+    varying vec3 vWorldNormal;
+    void main() {
+      vec4 worldPos = modelMatrix * vec4(position, 1.0);
+      vWorldPosition = worldPos.xyz;
+      // For lines on a sphere, the "normal" is just the normalized position (points outward from center)
+      vWorldNormal = normalize((modelMatrix * vec4(normalize(position), 0.0)).xyz);
+      gl_Position = projectionMatrix * viewMatrix * worldPos;
+    }
+  `;
+
+  function makeDepthFadeFragShader(r, g, b, baseOpacity) {
+    return `
+      uniform vec3 uCameraPos;
+      uniform float uFalloff;
+      uniform float uMinOpacity;
+      varying vec3 vWorldPosition;
+      varying vec3 vWorldNormal;
+      void main() {
+        vec3 toCamera = normalize(uCameraPos - vWorldPosition);
+        // dot = 1.0 when facing camera, -1.0 when facing away
+        float facing = dot(vWorldNormal, toCamera);
+        // Remap: 0..1 range for front-facing, clamp back-facing
+        float facingNorm = clamp(facing, 0.0, 1.0);
+        // Apply power curve for falloff control: higher = sharper cutoff
+        float fade = pow(facingNorm, uFalloff);
+        // Mix between min opacity and full opacity
+        float alpha = mix(uMinOpacity, ${baseOpacity.toFixed(2)}, fade);
+        gl_FragColor = vec4(${(r/255).toFixed(3)}, ${(g/255).toFixed(3)}, ${(b/255).toFixed(3)}, alpha);
+      }
+    `;
+  }
+
+  // Shared uniforms (updated every frame)
+  const depthFadeUniforms = {
+    uCameraPos: { value: new THREE.Vector3(0, 0, 3.2) },
+    uFalloff: { value: 2.5 },
+    uMinOpacity: { value: 0.03 },
+  };
+
+  function makeDepthFadeMaterial(r, g, b, baseOpacity) {
+    return new THREE.ShaderMaterial({
+      vertexShader: depthFadeVertexShader,
+      fragmentShader: makeDepthFadeFragShader(r, g, b, baseOpacity),
+      uniforms: {
+        uCameraPos: depthFadeUniforms.uCameraPos,
+        uFalloff: depthFadeUniforms.uFalloff,
+        uMinOpacity: depthFadeUniforms.uMinOpacity,
+      },
+      transparent: true,
+      depthWrite: false,
+    });
+  }
+
+  // Materials using the depth-fade shader
+  const coastMat = makeDepthFadeMaterial(0, 255, 65, 0.8);       // bright green coastlines
+  const coastGlowMat = makeDepthFadeMaterial(0, 255, 65, 0.2);   // subtle inner glow
+  const borderMat = makeDepthFadeMaterial(0, 68, 0, 0.35);       // dim country borders
+
+  // Upgrade wireframe grid lines to use depth-fade too
+  const gridFadeMat = makeDepthFadeMaterial(0, 68, 0, 0.5);      // dark grid lines
+  const gridBrightFadeMat = makeDepthFadeMaterial(0, 255, 65, 0.15); // equator/prime meridian
+  const gridGlowFadeMat = makeDepthFadeMaterial(0, 255, 65, 0.08);  // outer glow rings
+  globeGroup.children.forEach(child => {
+    if (child.isLine && child.material) {
+      const c = child.material.color;
+      const o = child.material.opacity;
+      if (!child.material.isShaderMaterial) {
+        // Match by color/opacity to the right replacement
+        if (c && c.r < 0.02 && c.g < 0.28 && o >= 0.4) {
+          child.material = gridFadeMat; // dark green grid
+        } else if (c && c.g > 0.9 && o < 0.12) {
+          child.material = gridGlowFadeMat; // glow rings
+        } else if (c && c.g > 0.9 && o < 0.2) {
+          child.material = gridBrightFadeMat; // bright lines (equator etc)
+        }
+      }
+    }
+  });
+
+  // --- HUD control panel (slider) ---
+  const controlPanel = document.createElement('div');
+  controlPanel.style.cssText = `
+    position:absolute; bottom:6px; right:6px; z-index:5;
+    background: rgba(0,10,0,0.85); border:1px solid rgba(0,255,65,0.3);
+    padding: 8px 10px; font-size:9px; color:#00ff41;
+    font-family:'Share Tech Mono',monospace; pointer-events:auto;
+    box-shadow: 0 0 10px rgba(0,255,65,0.1); min-width: 150px;
+  `;
+  controlPanel.innerHTML = `
+    <div style="color:#00ffff;letter-spacing:1px;margin-bottom:6px;font-size:8px;">◆ RENDER CTRL</div>
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+      <span style="white-space:nowrap;min-width:56px;">FALLOFF</span>
+      <input type="range" id="globe-falloff" min="0" max="80" value="25"
+        style="flex:1;accent-color:#00ff41;height:3px;cursor:pointer;-webkit-appearance:none;
+        background:linear-gradient(90deg,#003300,#00ff41);border-radius:2px;outline:none;">
+      <span id="globe-falloff-val" style="min-width:28px;text-align:right;color:#00ffff;">2.5</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:6px;">
+      <span style="white-space:nowrap;min-width:56px;">MIN <span style="font-size:7px;color:#666;">OPACITY</span></span>
+      <input type="range" id="globe-minopac" min="0" max="100" value="3"
+        style="flex:1;accent-color:#00ff41;height:3px;cursor:pointer;-webkit-appearance:none;
+        background:linear-gradient(90deg,#003300,#00ff41);border-radius:2px;outline:none;">
+      <span id="globe-minopac-val" style="min-width:28px;text-align:right;color:#00ffff;">0.03</span>
+    </div>
+  `;
+  container.appendChild(controlPanel);
+
+  // Wire up slider events
+  const falloffSlider = controlPanel.querySelector('#globe-falloff');
+  const falloffVal = controlPanel.querySelector('#globe-falloff-val');
+  const minopacSlider = controlPanel.querySelector('#globe-minopac');
+  const minopacVal = controlPanel.querySelector('#globe-minopac-val');
+
+  falloffSlider.addEventListener('input', () => {
+    const v = parseFloat(falloffSlider.value) / 10;
+    depthFadeUniforms.uFalloff.value = v;
+    falloffVal.textContent = v.toFixed(1);
+  });
+  minopacSlider.addEventListener('input', () => {
+    const v = parseFloat(minopacSlider.value) / 100;
+    depthFadeUniforms.uMinOpacity.value = v;
+    minopacVal.textContent = v.toFixed(2);
+  });
+
+  // Prevent panel drag when interacting with sliders
+  controlPanel.addEventListener('mousedown', e => e.stopPropagation());
+
   // --- Real coastline outlines from Natural Earth 110m ---
   const coastlineGroup = new THREE.Group();
   globeGroup.add(coastlineGroup);
-
-  // Outline material (bright green wireframe coastlines)
-  const coastMat = new THREE.LineBasicMaterial({
-    color: 0x00ff41, transparent: true, opacity: 0.7
-  });
-  // Subtle fill glow material
-  const coastGlowMat = new THREE.LineBasicMaterial({
-    color: 0x00ff41, transparent: true, opacity: 0.15
-  });
 
   fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/land-110m.json')
     .then(r => r.json())
@@ -2036,7 +2158,7 @@ function createWorldMap(body) {
 
         rings.forEach(ring => {
           const points = [];
-          const innerPoints = []; // slightly smaller for fill effect
+          const innerPoints = [];
 
           for (let i = 0; i < ring.length; i++) {
             const [lon, lat] = ring[i];
@@ -2046,11 +2168,11 @@ function createWorldMap(body) {
 
           if (points.length < 2) return;
 
-          // Main coastline outline
+          // Main coastline outline (depth-faded)
           const lineGeom = new THREE.BufferGeometry().setFromPoints(points);
           coastlineGroup.add(new THREE.Line(lineGeom, coastMat));
 
-          // Inner glow line (slightly recessed, dimmer)
+          // Inner glow line (depth-faded, dimmer)
           const glowGeom = new THREE.BufferGeometry().setFromPoints(innerPoints);
           coastlineGroup.add(new THREE.Line(glowGeom, coastGlowMat));
         });
@@ -2061,14 +2183,8 @@ function createWorldMap(body) {
     })
     .then(r => r.json())
     .then(world => {
-      // Extract internal borders using topojson.mesh with filter
       const borders = topojson.mesh(world, world.objects.countries, (a, b) => a !== b);
 
-      const borderMat = new THREE.LineBasicMaterial({
-        color: 0x004400, transparent: true, opacity: 0.35
-      });
-
-      // borders is a MultiLineString
       if (borders.type === 'MultiLineString') {
         borders.coordinates.forEach(line => {
           const points = [];
@@ -2085,7 +2201,6 @@ function createWorldMap(body) {
     })
     .catch(err => {
       console.warn('Failed to load coastline data, falling back to dot cloud', err);
-      // Fallback: simple dot cloud if fetch fails
       const boxes = [
         { latMin: 25, latMax: 70, lonMin: -140, lonMax: -55 },
         { latMin: -55, latMax: 10, lonMin: -80, lonMax: -35 },
@@ -2399,6 +2514,9 @@ function createWorldMap(body) {
         impacts.splice(i, 1);
       }
     }
+
+    // Update depth-fade shader uniforms
+    depthFadeUniforms.uCameraPos.value.copy(camera.position);
 
     // Render
     renderer.render(scene, camera);
