@@ -714,6 +714,9 @@
       <span style="color:var(--purple)">▶ OPERATION BLACKOUT</span>
     </div>
     <div class="section">
+      <span style="color:#004400;cursor:pointer;" onclick="toggleHelpOverlay()" title="Keyboard shortcuts">[?] KEYS</span>
+    </div>
+    <div class="section">
       <span id="uptime" style="color:var(--green);">00:00:00</span>
     </div>
   </div>
@@ -3066,15 +3069,89 @@ function initSelectionBox() {
 }
 
 // --- KEYBOARD SHORTCUTS ---
+function closeAllPanels() {
+  $$('.panel').forEach(p => {
+    p.style.transition = 'opacity 0.3s, transform 0.3s';
+    p.style.opacity = '0';
+    p.style.transform = 'scale(0.9)';
+    setTimeout(() => p.remove(), 300);
+  });
+  panels = [];
+  notify('All panels closed — press [L] to restore', 'warn');
+}
+
+const HOTKEYS = [
+  { key: '?',      label: '?',      desc: 'Toggle this help overlay' },
+  { key: 'g',      label: 'G',      desc: 'Trigger glitch effect' },
+  { key: 'n',      label: 'N',      desc: 'Toggle night vision mode' },
+  { key: 't',      label: 'T',      desc: 'Spawn new floating terminal' },
+  { key: 'h',      label: 'H',      desc: 'Hack The Gibson (full sequence)' },
+  { key: 'r',      label: 'R',      desc: 'Run network scan' },
+  { key: 'q',      label: 'Q',      desc: 'Close all panels (clear view)' },
+  { key: 'l',      label: 'L',      desc: 'Restore default layout' },
+  { key: 'Escape', label: 'ESC',    desc: 'Defocus all panels' },
+];
+
+let helpOverlayVisible = false;
+let helpOverlayEl = null;
+
+function toggleHelpOverlay() {
+  if (helpOverlayEl) {
+    helpOverlayEl.remove();
+    helpOverlayEl = null;
+    helpOverlayVisible = false;
+    return;
+  }
+  helpOverlayVisible = true;
+  helpOverlayEl = document.createElement('div');
+  helpOverlayEl.style.cssText = `
+    position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+    background:rgba(0,10,0,0.95); border:1px solid var(--green);
+    padding:24px 32px; z-index:100001; min-width:360px;
+    box-shadow: 0 0 40px rgba(0,255,65,0.3), 0 0 80px rgba(0,255,65,0.1);
+    font-family:'Share Tech Mono',monospace;
+  `;
+  let html = `
+    <div style="font-family:'Orbitron',sans-serif;font-size:14px;color:#00ffff;letter-spacing:3px;margin-bottom:16px;text-align:center;text-shadow:0 0 10px rgba(0,255,255,0.5);">
+      ◆ KEYBOARD SHORTCUTS ◆
+    </div>
+    <div style="display:flex;flex-direction:column;gap:6px;">
+  `;
+  HOTKEYS.forEach(h => {
+    html += `
+      <div style="display:flex;align-items:center;gap:12px;font-size:12px;">
+        <span style="
+          display:inline-block;min-width:48px;text-align:center;
+          padding:3px 8px;background:rgba(0,255,65,0.1);border:1px solid rgba(0,255,65,0.3);
+          color:#00ff41;font-size:11px;letter-spacing:1px;
+        ">${h.label}</span>
+        <span style="color:#00ff41;opacity:0.8;">${h.desc}</span>
+      </div>
+    `;
+  });
+  html += `
+    </div>
+    <div style="margin-top:16px;text-align:center;font-size:9px;color:#004400;">
+      Press <span style="color:#00ffff;">?</span> to close  ·  Right-click for context menu
+    </div>
+  `;
+  helpOverlayEl.innerHTML = html;
+  document.body.appendChild(helpOverlayEl);
+}
+
 function initKeyboard() {
   document.addEventListener('keydown', e => {
     if (e.target.tagName === 'INPUT') return;
+    if (e.key === '?') toggleHelpOverlay();
     if (e.key === 'g') triggerGlitch();
     if (e.key === 'n') toggleNightVision();
     if (e.key === 't') spawnFloatingTerminal();
     if (e.key === 'h') hackTheGibson();
     if (e.key === 'r') runNetScan();
+    if (e.key === 'q') closeAllPanels();
+    if (e.key === 'l') resetLayout();
     if (e.key === 'Escape') {
+      if (helpOverlayVisible) { toggleHelpOverlay(); return; }
       $$('.panel').forEach(p => p.classList.remove('focused'));
       notify('All panels defocused');
     }
