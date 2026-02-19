@@ -672,6 +672,20 @@
         </div>
       </div>
     </div>
+    <div style="display:flex;align-items:center;gap:4px;font-size:9px;color:#00ff41;border-left:1px solid #003300;padding-left:10px;margin-left:2px;">
+      <span style="color:#00ffff;letter-spacing:1px;font-size:8px;">RAIN</span>
+      <input type="range" id="matrix-density" min="5" max="100" value="55" title="Column density / frequency"
+        style="width:52px;accent-color:#00ff41;height:2px;cursor:pointer;-webkit-appearance:none;
+        background:linear-gradient(90deg,#002200,#00ff41);border-radius:2px;outline:none;">
+      <span id="matrix-density-val" style="min-width:20px;color:#00ffff;font-size:8px;">55%</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:4px;font-size:9px;color:#00ff41;border-left:1px solid #001a00;padding-left:6px;">
+      <span style="color:#00ffff;letter-spacing:1px;font-size:8px;">SIZE</span>
+      <input type="range" id="matrix-fontscale" min="5" max="100" value="45" title="Glyph size"
+        style="width:52px;accent-color:#00ff41;height:2px;cursor:pointer;-webkit-appearance:none;
+        background:linear-gradient(90deg,#002200,#00ff41);border-radius:2px;outline:none;">
+      <span id="matrix-fontscale-val" style="min-width:20px;color:#00ffff;font-size:8px;">45%</span>
+    </div>
     <div class="top-bar-status">
       <div class="status-indicator"><div class="status-dot dot-green"></div>UPLINK</div>
       <div class="status-indicator"><div class="status-dot dot-cyan"></div>TOR x3</div>
@@ -901,14 +915,17 @@ function initMatrix() {
     uniform float uAtlasCols;
     uniform float uAtlasRows;
     uniform float uNumGlyphs;
+    uniform float uDensity;
+    uniform float uFontScale;
 
     // Hash functions for pseudo-random per-column values
     float hash(float n) { return fract(sin(n) * 43758.5453123); }
     float hash2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 
     void main() {
-      // Grid dimensions
-      float cellSize = 14.0;  // pixel size of each character cell
+      // --- Font size: independent control ---
+      // uFontScale 0.0..1.0 → cellSize 6..24 pixels
+      float cellSize = mix(6.0, 24.0, uFontScale);
       vec2 pixelPos = vUv * uResolution;
 
       float col = floor(pixelPos.x / cellSize);
@@ -917,92 +934,121 @@ function initMatrix() {
       // Flip row so row 0 is at the TOP (WebGL UV y=0 is bottom)
       float row = totalRows - floor(pixelPos.y / cellSize);
 
-      // Per-column random properties
-      float colSeed = col + 0.5;
-      float speed      = 0.3 + hash(colSeed * 1.17) * 1.4;          // fall speed
-      float offset     = hash(colSeed * 2.31) * 80.0;               // start offset
-      float brightness = 0.7 + hash(colSeed * 3.47) * 0.3;          // base brightness (boosted)
-      float cycleSpeed = 1.0 + hash(colSeed * 4.59) * 3.0;          // character change rate
-      float trailLen   = 15.0 + hash(colSeed * 5.73) * 25.0;        // trail length in cells (longer)
-      float depth      = 0.5 + hash(colSeed * 6.11) * 0.5;          // depth layer (brighter min)
+      // --- Column frequency: layered streams ---
+      // More layers = more overlapping streams at each column.
+      // Layer count: 1 at low density, up to 4 at max density.
+      int numLayers = 1;
+      if (uDensity > 0.35) numLayers = 2;
+      if (uDensity > 0.60) numLayers = 3;
+      if (uDensity > 0.80) numLayers = 4;
 
-      // Which "head" position in this column (wrapping)
-      float headPos = mod(uTime * speed + offset, totalRows + trailLen + 8.0);
+      // Also skip columns at low densities for sparseness
+      float skipThreshold = smoothstep(0.0, 0.4, uDensity);
 
-      // Distance from head (0 = head, positive = behind/above)
-      float distFromHead = headPos - row;
+      float finalAlpha = 0.0;
+      vec3 finalColor = vec3(0.0);
 
-      // Trail fade: bright at head, fading behind
-      float trail = 0.0;
-      if (distFromHead >= 0.0 && distFromHead < trailLen) {
-        trail = 1.0 - (distFromHead / trailLen);
-        // Softer curve: pow 1.5 instead of squaring — keeps tail visible longer
-        trail = pow(trail, 1.5);
-      }
+      for (int layer = 0; layer < 4; layer++) {
+        if (layer >= numLayers) break;
 
-      // Head glow: extra bright white-ish at the leading tip
-      float headGlow = 0.0;
-      if (distFromHead >= 0.0 && distFromHead < 2.5) {
-        headGlow = 1.0 - distFromHead / 2.5;
-        headGlow = headGlow * headGlow;
-      }
+        float layerF = float(layer);
 
-      // Character selection: changes over time for each cell
-      float charIndex = mod(
-        floor(hash2(vec2(col, row)) * uNumGlyphs + uTime * cycleSpeed),
-        uNumGlyphs
-      );
-      // Head chars change faster for that "decoding" effect
-      if (distFromHead >= 0.0 && distFromHead < 3.0) {
-        charIndex = mod(floor(hash(col * 17.0 + row * 31.0 + uTime * 12.0) * uNumGlyphs), uNumGlyphs);
-      }
+        // Each layer offsets the column seed so streams are independent
+        float colSeed = col + 0.5 + layerF * 137.0;
 
-      // UV into the glyph atlas
-      float glyphCol = mod(charIndex, uAtlasCols);
-      float glyphRow = floor(charIndex / uAtlasCols);
+        // Column skip check (different per layer so layers don't all share gaps)
+        float colActive = hash(colSeed * 7.77 + layerF * 3.33);
+        if (colActive > skipThreshold) continue;
 
-      vec2 cellUv = fract(pixelPos / cellSize);
-      // Flip Y for proper glyph orientation
-      cellUv.y = 1.0 - cellUv.y;
-      // Add some padding to avoid bleeding
-      cellUv = cellUv * 0.85 + 0.075;
+        float speed      = 0.3 + hash(colSeed * 1.17) * 1.4;
+        float offset     = hash(colSeed * 2.31) * 80.0;
+        float brightness = 0.7 + hash(colSeed * 3.47) * 0.3;
+        float cycleSpeed = 1.0 + hash(colSeed * 4.59) * 3.0;
+        float trailLen   = 15.0 + hash(colSeed * 5.73) * 25.0;
+        float depth      = 0.5 + hash(colSeed * 6.11) * 0.5;
 
-      vec2 atlasUv = vec2(
-        (glyphCol + cellUv.x) / uAtlasCols,
-        (glyphRow + cellUv.y) / uAtlasRows
-      );
+        // Deeper layers are slightly dimmer
+        float layerDim = 1.0 - layerF * 0.15;
 
-      float glyphAlpha = texture2D(uAtlas, atlasUv).r;
+        float headPos = mod(uTime * speed + offset, totalRows + trailLen + 8.0);
+        float distFromHead = headPos - row;
 
-      // Combine: trail brightness × glyph shape × depth
-      float alpha = trail * glyphAlpha * brightness * depth;
+        // Trail fade
+        float trail = 0.0;
+        if (distFromHead >= 0.0 && distFromHead < trailLen) {
+          trail = 1.0 - (distFromHead / trailLen);
+          trail = pow(trail, 1.5);
+        }
 
-      // Color: rich deep green base, whiter/brighter at the head
-      vec3 green = vec3(0.05, 0.85, 0.15);
-      vec3 brightGreen = vec3(0.2, 1.0, 0.3);
-      vec3 white = vec3(0.75, 1.0, 0.85);
-      // Mid-trail gets a brighter green, head gets white
-      vec3 color = mix(green, brightGreen, trail * 0.5);
-      color = mix(color, white, headGlow * 0.9);
+        // Head glow
+        float headGlow = 0.0;
+        if (distFromHead >= 0.0 && distFromHead < 2.5) {
+          headGlow = 1.0 - distFromHead / 2.5;
+          headGlow = headGlow * headGlow;
+        }
 
-      // Add extra luminance at the head
-      alpha += headGlow * glyphAlpha * 1.0;
+        if (trail <= 0.0 && headGlow <= 0.0) continue;
 
-      // Occasional "bright flash" columns (randomly)
-      float flashPhase = sin(uTime * 0.3 + col * 0.7);
-      if (flashPhase > 0.95) {
-        alpha *= 1.8;
-        color = mix(color, white, 0.4);
-      }
+        // Character selection: unique per layer
+        float charIndex = mod(
+          floor(hash2(vec2(colSeed, row)) * uNumGlyphs + uTime * cycleSpeed),
+          uNumGlyphs
+        );
+        // Head chars change faster for that "decoding" effect
+        if (distFromHead >= 0.0 && distFromHead < 3.0) {
+          charIndex = mod(floor(hash(colSeed * 17.0 + row * 31.0 + uTime * 12.0) * uNumGlyphs), uNumGlyphs);
+        }
+
+        // UV into the glyph atlas
+        float glyphCol = mod(charIndex, uAtlasCols);
+        float glyphRow = floor(charIndex / uAtlasCols);
+
+        vec2 cellUv = fract(pixelPos / cellSize);
+        cellUv.y = 1.0 - cellUv.y;
+        cellUv = cellUv * 0.85 + 0.075;
+
+        vec2 atlasUv = vec2(
+          (glyphCol + cellUv.x) / uAtlasCols,
+          (glyphRow + cellUv.y) / uAtlasRows
+        );
+
+        float glyphAlpha = texture2D(uAtlas, atlasUv).r;
+
+        // Combine: trail × glyph × brightness × depth × layer dimming
+        float alpha = trail * glyphAlpha * brightness * depth * layerDim;
+
+        // Color: rich deep green base, whiter/brighter at the head
+        vec3 green = vec3(0.05, 0.85, 0.15);
+        vec3 brightGreen = vec3(0.2, 1.0, 0.3);
+        vec3 white = vec3(0.75, 1.0, 0.85);
+        vec3 color = mix(green, brightGreen, trail * 0.5);
+        color = mix(color, white, headGlow * 0.9);
+
+        alpha += headGlow * glyphAlpha * 1.0 * layerDim;
+
+        // Flash
+        float flashPhase = sin(uTime * 0.3 + colSeed * 0.7);
+        if (flashPhase > 0.95) {
+          alpha *= 1.8;
+          color = mix(color, white, 0.4);
+        }
+
+        // Composite layer using additive-ish blend (screen-like)
+        finalColor = finalColor + color * alpha * (1.0 - finalAlpha);
+        finalAlpha = finalAlpha + alpha * (1.0 - finalAlpha);
+
+      } // end layer loop
 
       // Subtle scanline darkening on even rows
       float scanline = 0.92 + 0.08 * mod(row, 2.0);
-      alpha *= scanline;
+      finalAlpha *= scanline;
+      finalColor *= scanline;
 
-      // Final boost — pump it up
-      alpha *= 1.4;
+      // Final boost
+      finalAlpha *= 1.4;
+      finalColor *= 1.4;
 
-      gl_FragColor = vec4(color * alpha, alpha);
+      gl_FragColor = vec4(finalColor, finalAlpha);
     }
   `;
 
@@ -1046,11 +1092,20 @@ function initMatrix() {
   const uAtlasCols = gl.getUniformLocation(program, 'uAtlasCols');
   const uAtlasRows = gl.getUniformLocation(program, 'uAtlasRows');
   const uNumGlyphs = gl.getUniformLocation(program, 'uNumGlyphs');
+  const uDensityLoc = gl.getUniformLocation(program, 'uDensity');
+  const uFontScaleLoc = gl.getUniformLocation(program, 'uFontScale');
 
   gl.uniform1i(uAtlas, 0);
   gl.uniform1f(uAtlasCols, ATLAS_COLS);
   gl.uniform1f(uAtlasRows, ATLAS_ROWS);
   gl.uniform1f(uNumGlyphs, GLYPH_CHARS.length);
+
+  // Density: 0.0 = sparse, 1.0 = max streams (4 layers, all columns)
+  let matrixDensity = 0.55;
+  // Font scale: 0.0 = tiny (6px), 1.0 = large (24px)
+  let matrixFontScale = 0.45;
+  gl.uniform1f(uDensityLoc, matrixDensity);
+  gl.uniform1f(uFontScaleLoc, matrixFontScale);
 
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_2D, atlasTexture);
@@ -1067,11 +1122,17 @@ function initMatrix() {
   resize();
   window.addEventListener('resize', resize);
 
+  // Expose setters for the UI sliders
+  window.setMatrixDensity = function(v) { matrixDensity = v; };
+  window.setMatrixFontScale = function(v) { matrixFontScale = v; };
+
   // --- Render loop ---
   const startTime = Date.now();
   function draw() {
     const t = (Date.now() - startTime) / 1000.0;
     gl.uniform1f(uTime, t);
+    gl.uniform1f(uDensityLoc, matrixDensity);
+    gl.uniform1f(uFontScaleLoc, matrixFontScale);
     gl.uniform2f(uRes, canvas.width, canvas.height);
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
@@ -2965,7 +3026,30 @@ function initAll() {
   initContextMenu();
   initSelectionBox();
   initKeyboard();
+  initMatrixSlider();
   startAutoNotifications();
+}
+
+function initMatrixSlider() {
+  const densitySlider = document.getElementById('matrix-density');
+  const densityVal = document.getElementById('matrix-density-val');
+  const fontSlider = document.getElementById('matrix-fontscale');
+  const fontVal = document.getElementById('matrix-fontscale-val');
+
+  if (densitySlider) {
+    densitySlider.addEventListener('input', () => {
+      const v = parseInt(densitySlider.value);
+      densityVal.textContent = v + '%';
+      if (window.setMatrixDensity) window.setMatrixDensity(v / 100);
+    });
+  }
+  if (fontSlider) {
+    fontSlider.addEventListener('input', () => {
+      const v = parseInt(fontSlider.value);
+      fontVal.textContent = v + '%';
+      if (window.setMatrixFontScale) window.setMatrixFontScale(v / 100);
+    });
+  }
 }
 
 // --- CLOCK ---
