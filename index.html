@@ -616,6 +616,7 @@
     border-radius: 1px;
   }
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
 <body>
 <canvas id="matrix-bg"></canvas>
@@ -1909,11 +1910,146 @@ function createBarChart(body) {
 
 // --- WORLD MAP (ASCII-ish) ---
 function createWorldMap(body) {
-  const canvas = document.createElement('canvas');
-  canvas.className = 'graph-canvas';
-  body.appendChild(canvas);
+  const container = document.createElement('div');
+  container.style.cssText = 'width:100%;height:100%;position:relative;overflow:hidden;';
+  body.appendChild(container);
 
-  // Simplified world map coordinates (lat/lon to canvas)
+  // --- HUD overlay canvas for labels/stats ---
+  const hudCanvas = document.createElement('canvas');
+  hudCanvas.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:2;';
+  container.appendChild(hudCanvas);
+
+  // --- Three.js setup ---
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
+  camera.position.z = 3.2;
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setClearColor(0x000000, 0);
+  container.insertBefore(renderer.domElement, hudCanvas);
+  renderer.domElement.style.cssText = 'width:100%;height:100%;position:absolute;top:0;left:0;';
+
+  const globeGroup = new THREE.Group();
+  scene.add(globeGroup);
+
+  const GLOBE_R = 1.0;
+
+  // --- Wireframe sphere (latitude/longitude lines) ---
+  function buildWireframeGlobe() {
+    const material = new THREE.LineBasicMaterial({ color: 0x004400, transparent: true, opacity: 0.5 });
+    const brightMat = new THREE.LineBasicMaterial({ color: 0x00ff41, transparent: true, opacity: 0.15 });
+
+    // Latitude lines
+    for (let lat = -80; lat <= 80; lat += 20) {
+      const phi = (90 - lat) * Math.PI / 180;
+      const r = GLOBE_R * Math.sin(phi);
+      const y = GLOBE_R * Math.cos(phi);
+      const pts = [];
+      for (let i = 0; i <= 72; i++) {
+        const theta = (i / 72) * Math.PI * 2;
+        pts.push(new THREE.Vector3(r * Math.cos(theta), y, r * Math.sin(theta)));
+      }
+      const geom = new THREE.BufferGeometry().setFromPoints(pts);
+      globeGroup.add(new THREE.Line(geom, lat === 0 ? brightMat : material));
+    }
+
+    // Longitude lines
+    for (let lon = 0; lon < 360; lon += 20) {
+      const theta = lon * Math.PI / 180;
+      const pts = [];
+      for (let i = 0; i <= 72; i++) {
+        const phi = (i / 72) * Math.PI;
+        pts.push(new THREE.Vector3(
+          GLOBE_R * Math.sin(phi) * Math.cos(theta),
+          GLOBE_R * Math.cos(phi),
+          GLOBE_R * Math.sin(phi) * Math.sin(theta)
+        ));
+      }
+      const geom = new THREE.BufferGeometry().setFromPoints(pts);
+      globeGroup.add(new THREE.Line(geom, (lon === 0 || lon === 180) ? brightMat : material));
+    }
+
+    // Outer glow ring (equator emphasis)
+    const glowMat = new THREE.LineBasicMaterial({ color: 0x00ff41, transparent: true, opacity: 0.08 });
+    for (let offset = 0.01; offset <= 0.03; offset += 0.01) {
+      const pts = [];
+      for (let i = 0; i <= 72; i++) {
+        const theta = (i / 72) * Math.PI * 2;
+        pts.push(new THREE.Vector3((GLOBE_R + offset) * Math.cos(theta), 0, (GLOBE_R + offset) * Math.sin(theta)));
+      }
+      const geom = new THREE.BufferGeometry().setFromPoints(pts);
+      globeGroup.add(new THREE.Line(geom, glowMat));
+    }
+  }
+  buildWireframeGlobe();
+
+  // --- Atmosphere shell ---
+  const atmosGeom = new THREE.SphereGeometry(GLOBE_R * 1.02, 32, 32);
+  const atmosMat = new THREE.MeshBasicMaterial({
+    color: 0x00ff41, transparent: true, opacity: 0.03, side: THREE.BackSide
+  });
+  globeGroup.add(new THREE.Mesh(atmosGeom, atmosMat));
+
+  // --- Continent dot cloud (rough shapes via point sampling) ---
+  // Encode rough continent boundaries as lat/lon boxes, then scatter points
+  const continentBoxes = [
+    // North America
+    { latMin: 25, latMax: 50, lonMin: -130, lonMax: -65 },
+    { latMin: 50, latMax: 70, lonMin: -140, lonMax: -55 },
+    { latMin: 15, latMax: 25, lonMin: -110, lonMax: -80 },
+    // South America
+    { latMin: -55, latMax: 10, lonMin: -80, lonMax: -35 },
+    // Europe
+    { latMin: 36, latMax: 60, lonMin: -10, lonMax: 40 },
+    { latMin: 55, latMax: 70, lonMin: 5, lonMax: 35 },
+    // Africa
+    { latMin: -35, latMax: 35, lonMin: -18, lonMax: 50 },
+    // Asia
+    { latMin: 10, latMax: 55, lonMin: 60, lonMax: 145 },
+    { latMin: 55, latMax: 70, lonMin: 60, lonMax: 180 },
+    // India
+    { latMin: 8, latMax: 28, lonMin: 68, lonMax: 90 },
+    // SE Asia
+    { latMin: -8, latMax: 20, lonMin: 95, lonMax: 140 },
+    // Australia
+    { latMin: -40, latMax: -12, lonMin: 112, lonMax: 155 },
+    // Japan/Korea
+    { latMin: 30, latMax: 45, lonMin: 128, lonMax: 146 },
+    // UK
+    { latMin: 50, latMax: 59, lonMin: -8, lonMax: 2 },
+  ];
+
+  function latLonToVec3(lat, lon, radius) {
+    const phi = (90 - lat) * Math.PI / 180;
+    const theta = (lon + 180) * Math.PI / 180;
+    return new THREE.Vector3(
+      -radius * Math.sin(phi) * Math.cos(theta),
+      radius * Math.cos(phi),
+      radius * Math.sin(phi) * Math.sin(theta)
+    );
+  }
+
+  const landPoints = [];
+  const landVertices = [];
+  for (const box of continentBoxes) {
+    const area = (box.latMax - box.latMin) * (box.lonMax - box.lonMin);
+    const numPts = Math.floor(area / 8);
+    for (let i = 0; i < numPts; i++) {
+      const lat = rand(box.latMin, box.latMax);
+      const lon = rand(box.lonMin, box.lonMax);
+      const v = latLonToVec3(lat, lon, GLOBE_R * 1.002);
+      landVertices.push(v.x, v.y, v.z);
+      landPoints.push({ lat, lon });
+    }
+  }
+
+  const landGeom = new THREE.BufferGeometry();
+  landGeom.setAttribute('position', new THREE.Float32BufferAttribute(landVertices, 3));
+  const landMat = new THREE.PointsMaterial({ color: 0x00ff41, size: 0.012, transparent: true, opacity: 0.6 });
+  globeGroup.add(new THREE.Points(landGeom, landMat));
+
+  // --- Cities ---
   const cities = [
     { name: 'NYC', lat: 40.7, lon: -74, threat: false },
     { name: 'LON', lat: 51.5, lon: -0.1, threat: false },
@@ -1927,142 +2063,352 @@ function createWorldMap(body) {
     { name: 'DXB', lat: 25.2, lon: 55.3, threat: true },
     { name: 'SIN', lat: 1.3, lon: 103.8, threat: false },
     { name: 'LAX', lat: 34, lon: -118.2, threat: false },
+    { name: 'PAR', lat: 48.9, lon: 2.35, threat: false },
+    { name: 'MUM', lat: 19.1, lon: 72.9, threat: true },
+    { name: 'JKT', lat: -6.2, lon: 106.8, threat: false },
+    { name: 'LIM', lat: -12, lon: -77, threat: true },
   ];
 
+  // City markers as small sphere meshes
+  const cityMeshes = [];
+  cities.forEach(c => {
+    const pos = latLonToVec3(c.lat, c.lon, GLOBE_R * 1.01);
+    const geom = new THREE.SphereGeometry(0.015, 8, 8);
+    const mat = new THREE.MeshBasicMaterial({ color: c.threat ? 0xff0040 : 0x00ff41 });
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.position.copy(pos);
+    mesh.userData = c;
+    globeGroup.add(mesh);
+    cityMeshes.push(mesh);
+
+    // Pulsing ring
+    const ringGeom = new THREE.RingGeometry(0.02, 0.03, 16);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: c.threat ? 0xff0040 : 0x00ff41,
+      transparent: true, opacity: 0.4, side: THREE.DoubleSide
+    });
+    const ring = new THREE.Mesh(ringGeom, ringMat);
+    ring.position.copy(pos);
+    ring.lookAt(new THREE.Vector3(0, 0, 0));
+    ring.userData.pulsePhase = rand(0, Math.PI * 2);
+    ring.userData.baseScale = 1;
+    globeGroup.add(ring);
+    c._ring = ring;
+    c._mesh = mesh;
+    c._pos = pos;
+  });
+
+  // --- Vertical ping beams from cities ---
+  cities.forEach(c => {
+    const dir = c._pos.clone().normalize();
+    const beamEnd = dir.clone().multiplyScalar(GLOBE_R * 1.15);
+    const pts = [c._pos.clone(), beamEnd];
+    const geom = new THREE.BufferGeometry().setFromPoints(pts);
+    const mat = new THREE.LineBasicMaterial({
+      color: c.threat ? 0xff0040 : 0x00ff41,
+      transparent: true, opacity: 0.3
+    });
+    const beam = new THREE.Line(geom, mat);
+    globeGroup.add(beam);
+    c._beam = beam;
+    c._beamMat = mat;
+  });
+
+  // --- Attack arcs ---
   const attacks = [];
+
+  function createArcCurve(fromCity, toCity) {
+    const from = latLonToVec3(fromCity.lat, fromCity.lon, GLOBE_R * 1.01);
+    const to = latLonToVec3(toCity.lat, toCity.lon, GLOBE_R * 1.01);
+    const mid = from.clone().add(to).multiplyScalar(0.5);
+    const dist = from.distanceTo(to);
+    // Lift control point above the globe surface
+    mid.normalize().multiplyScalar(GLOBE_R + dist * 0.5);
+
+    const curve = new THREE.QuadraticBezierCurve3(from, mid, to);
+    const points = curve.getPoints(64);
+    return { curve, points, from, to, mid };
+  }
+
   function spawnAttack() {
-    const from = pick(cities.filter(c => c.threat));
-    const to = pick(cities.filter(c => !c.threat));
-    if (from && to) {
-      attacks.push({ from, to, progress: 0, speed: rand(0.005, 0.02) });
-    }
+    const threatCities = cities.filter(c => c.threat);
+    const safeCities = cities.filter(c => !c.threat);
+    const from = pick(threatCities);
+    const to = pick(safeCities);
+    if (!from || !to) return;
+
+    const { curve, points } = createArcCurve(from, to);
+
+    // Arc trail line
+    const trailGeom = new THREE.BufferGeometry().setFromPoints(points);
+    const trailMat = new THREE.LineBasicMaterial({
+      color: 0xff0040, transparent: true, opacity: 0.6
+    });
+    const trail = new THREE.Line(trailGeom, trailMat);
+    globeGroup.add(trail);
+
+    // Projectile (bright dot)
+    const projGeom = new THREE.SphereGeometry(0.012, 6, 6);
+    const projMat = new THREE.MeshBasicMaterial({ color: 0xff4444 });
+    const projectile = new THREE.Mesh(projGeom, projMat);
+    globeGroup.add(projectile);
+
+    // Glow around projectile
+    const glowGeom = new THREE.SphereGeometry(0.025, 6, 6);
+    const glowMat = new THREE.MeshBasicMaterial({ color: 0xff0040, transparent: true, opacity: 0.3 });
+    const glow = new THREE.Mesh(glowGeom, glowMat);
+    globeGroup.add(glow);
+
+    attacks.push({
+      from, to, curve, trail, trailGeom, trailMat,
+      projectile, projMat, glow, glowMat,
+      progress: 0,
+      speed: rand(0.003, 0.012),
+      alive: true
+    });
   }
 
-  function latLonToXY(lat, lon, w, h) {
-    const x = (lon + 180) / 360 * w;
-    const y = (90 - lat) / 180 * h;
-    return { x, y };
+  // --- Impact explosions ---
+  const impacts = [];
+  function createImpact(position) {
+    const ringGeom = new THREE.RingGeometry(0.01, 0.02, 24);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0xff0040, transparent: true, opacity: 0.9, side: THREE.DoubleSide
+    });
+    const ring = new THREE.Mesh(ringGeom, ringMat);
+    ring.position.copy(position);
+    ring.lookAt(new THREE.Vector3(0, 0, 0));
+    globeGroup.add(ring);
+    impacts.push({ ring, ringMat, scale: 1, life: 1.0 });
   }
 
-  function draw() {
-    if (!document.body.contains(canvas)) return;
-    const w = canvas.parentElement.clientWidth;
-    const h = canvas.parentElement.clientHeight;
-    canvas.width = w; canvas.height = h;
-    const ctx = canvas.getContext('2d');
+  // --- Starfield background ---
+  const starVerts = [];
+  for (let i = 0; i < 1500; i++) {
+    starVerts.push(rand(-50, 50), rand(-50, 50), rand(-50, 50));
+  }
+  const starGeom = new THREE.BufferGeometry();
+  starGeom.setAttribute('position', new THREE.Float32BufferAttribute(starVerts, 3));
+  const starMat = new THREE.PointsMaterial({ color: 0x004400, size: 0.15 });
+  scene.add(new THREE.Points(starGeom, starMat));
+
+  // --- Orbital ring (decoration) ---
+  const orbitPts = [];
+  for (let i = 0; i <= 128; i++) {
+    const a = (i / 128) * Math.PI * 2;
+    orbitPts.push(new THREE.Vector3(Math.cos(a) * 1.6, Math.sin(a) * 0.1, Math.sin(a) * 1.6));
+  }
+  const orbitGeom = new THREE.BufferGeometry().setFromPoints(orbitPts);
+  const orbitMat = new THREE.LineBasicMaterial({ color: 0x003300, transparent: true, opacity: 0.3 });
+  const orbitLine = new THREE.Line(orbitGeom, orbitMat);
+  orbitLine.rotation.x = 0.3;
+  scene.add(orbitLine);
+
+  // Second orbit ring
+  const orbit2 = orbitLine.clone();
+  orbit2.rotation.x = -0.5;
+  orbit2.rotation.z = 0.8;
+  scene.add(orbit2);
+
+  // --- Mouse interaction (drag to rotate) ---
+  let isDragging = false;
+  let prevMouse = { x: 0, y: 0 };
+  let rotationVelocity = { x: 0, y: 0.003 }; // auto-rotate by default
+
+  renderer.domElement.style.pointerEvents = 'auto';
+  renderer.domElement.addEventListener('mousedown', e => {
+    isDragging = true;
+    prevMouse = { x: e.clientX, y: e.clientY };
+  });
+  renderer.domElement.addEventListener('mousemove', e => {
+    if (!isDragging) return;
+    const dx = e.clientX - prevMouse.x;
+    const dy = e.clientY - prevMouse.y;
+    rotationVelocity.y = dx * 0.003;
+    rotationVelocity.x = dy * 0.002;
+    prevMouse = { x: e.clientX, y: e.clientY };
+  });
+  renderer.domElement.addEventListener('mouseup', () => { isDragging = false; });
+  renderer.domElement.addEventListener('mouseleave', () => { isDragging = false; });
+
+  // Scroll to zoom
+  renderer.domElement.addEventListener('wheel', e => {
+    e.preventDefault();
+    camera.position.z = Math.max(1.8, Math.min(6, camera.position.z + e.deltaY * 0.002));
+  }, { passive: false });
+
+  // --- Animation loop ---
+  let attackTimer = 0;
+  let activeAttackCount = 0;
+
+  function animate() {
+    if (!document.body.contains(container)) return;
+    requestAnimationFrame(animate);
+
+    const w = container.clientWidth;
+    const h = container.clientHeight;
+    if (w === 0 || h === 0) return;
+
+    renderer.setSize(w, h);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    hudCanvas.width = w;
+    hudCanvas.height = h;
+
     const time = Date.now() / 1000;
 
-    // Draw grid
-    ctx.strokeStyle = 'rgba(0,68,0,0.15)';
-    ctx.lineWidth = 0.5;
-    for (let lon = -180; lon <= 180; lon += 30) {
-      const { x } = latLonToXY(0, lon, w, h);
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+    // Rotate globe
+    if (!isDragging) {
+      rotationVelocity.y += (0.003 - rotationVelocity.y) * 0.02; // ease back to auto-rotate
+      rotationVelocity.x *= 0.95; // dampen vertical
     }
-    for (let lat = -90; lat <= 90; lat += 30) {
-      const { y } = latLonToXY(lat, 0, w, h);
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
-    }
+    globeGroup.rotation.y += rotationVelocity.y;
+    globeGroup.rotation.x += rotationVelocity.x;
+    // Clamp vertical rotation
+    globeGroup.rotation.x = Math.max(-1.2, Math.min(1.2, globeGroup.rotation.x));
+    if (!isDragging) rotationVelocity.y *= 0.99;
 
-    // Simple continent outlines (very rough dots)
-    ctx.fillStyle = 'rgba(0,255,65,0.08)';
-    // North America
-    [[30,50,-130,-60],[50,70,-140,-55]].forEach(([lat1,lat2,lon1,lon2]) => {
-      const p1 = latLonToXY(lat2, lon1, w, h);
-      const p2 = latLonToXY(lat1, lon2, w, h);
-      ctx.fillRect(p1.x, p1.y, p2.x-p1.x, p2.y-p1.y);
-    });
-    // Europe
-    const eu = latLonToXY(60, -10, w, h);
-    const eu2 = latLonToXY(35, 40, w, h);
-    ctx.fillRect(eu.x, eu.y, eu2.x-eu.x, eu2.y-eu.y);
-    // Asia
-    const as = latLonToXY(55, 60, w, h);
-    const as2 = latLonToXY(10, 145, w, h);
-    ctx.fillRect(as.x, as.y, as2.x-as.x, as2.y-as.y);
-    // South America
-    const sa = latLonToXY(10, -80, w, h);
-    const sa2 = latLonToXY(-55, -35, w, h);
-    ctx.fillRect(sa.x, sa.y, sa2.x-sa.x, sa2.y-sa.y);
-    // Africa
-    const af = latLonToXY(35, -18, w, h);
-    const af2 = latLonToXY(-35, 50, w, h);
-    ctx.fillRect(af.x, af.y, af2.x-af.x, af2.y-af.y);
-    // Australia
-    const au = latLonToXY(-10, 112, w, h);
-    const au2 = latLonToXY(-40, 155, w, h);
-    ctx.fillRect(au.x, au.y, au2.x-au.x, au2.y-au.y);
-
-    // Cities
+    // Pulse city rings
     cities.forEach(c => {
-      const { x, y } = latLonToXY(c.lat, c.lon, w, h);
-      const pulse = Math.sin(time * 3 + c.lon) * 3;
-
-      ctx.beginPath();
-      ctx.arc(x, y, 4 + pulse, 0, Math.PI * 2);
-      ctx.fillStyle = c.threat ? 'rgba(255,0,64,0.3)' : 'rgba(0,255,65,0.3)';
-      ctx.fill();
-
-      ctx.beginPath();
-      ctx.arc(x, y, 2, 0, Math.PI * 2);
-      ctx.fillStyle = c.threat ? '#ff0040' : '#00ff41';
-      ctx.fill();
-
-      ctx.font = '7px "Share Tech Mono"';
-      ctx.fillStyle = 'rgba(0,255,255,0.8)';
-      ctx.fillText(c.name, x + 6, y + 3);
+      if (c._ring) {
+        const s = 1 + Math.sin(time * 3 + c._ring.userData.pulsePhase) * 0.5;
+        c._ring.scale.set(s, s, s);
+        c._ring.material.opacity = 0.2 + Math.sin(time * 3 + c._ring.userData.pulsePhase) * 0.2;
+      }
+      // Pulse beams
+      if (c._beamMat) {
+        c._beamMat.opacity = 0.15 + Math.sin(time * 4 + c.lon) * 0.15;
+      }
     });
 
-    // Attack lines
-    if (Math.random() > 0.97) spawnAttack();
+    // Spawn attacks
+    attackTimer += 0.016;
+    if (attackTimer > rand(0.8, 2.5) && attacks.filter(a => a.alive).length < 8) {
+      spawnAttack();
+      attackTimer = 0;
+    }
 
+    // Update attacks
+    activeAttackCount = 0;
     for (let i = attacks.length - 1; i >= 0; i--) {
       const atk = attacks[i];
+      if (!atk.alive) continue;
+      activeAttackCount++;
+
       atk.progress += atk.speed;
 
-      const from = latLonToXY(atk.from.lat, atk.from.lon, w, h);
-      const to = latLonToXY(atk.to.lat, atk.to.lon, w, h);
+      // Move projectile along curve
+      const pt = atk.curve.getPoint(Math.min(atk.progress, 1));
+      atk.projectile.position.copy(pt);
+      atk.glow.position.copy(pt);
+      atk.glow.scale.setScalar(1 + Math.sin(time * 20) * 0.3);
 
-      // Arc
-      const cpx = (from.x + to.x) / 2;
-      const cpy = Math.min(from.y, to.y) - 30;
+      // Fade trail with progress
+      atk.trailMat.opacity = 0.5 * (1 - atk.progress * 0.5);
 
-      ctx.beginPath();
-      ctx.moveTo(from.x, from.y);
-      ctx.quadraticCurveTo(cpx, cpy, to.x, to.y);
-      ctx.strokeStyle = `rgba(255,0,64,${0.6 * (1 - atk.progress)})`;
-      ctx.lineWidth = 1;
-      ctx.stroke();
-
-      // Moving dot
-      const t = atk.progress;
-      const px = (1-t)*(1-t)*from.x + 2*(1-t)*t*cpx + t*t*to.x;
-      const py = (1-t)*(1-t)*from.y + 2*(1-t)*t*cpy + t*t*to.y;
-      ctx.beginPath();
-      ctx.arc(px, py, 2, 0, Math.PI * 2);
-      ctx.fillStyle = '#ff0040';
-      ctx.fill();
+      // Partial trail drawing: show only the part behind the projectile
+      const totalPts = 65;
+      const visiblePts = Math.floor(atk.progress * totalPts);
+      const positions = atk.trailGeom.attributes.position.array;
+      // Fade will handle visual, keep full trail
 
       if (atk.progress >= 1) {
-        // Impact
-        ctx.beginPath();
-        ctx.arc(to.x, to.y, 10, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(255,0,64,0.3)';
-        ctx.fill();
+        atk.alive = false;
+        // Impact!
+        createImpact(atk.curve.getPoint(1));
+
+        // Cleanup
+        globeGroup.remove(atk.trail);
+        globeGroup.remove(atk.projectile);
+        globeGroup.remove(atk.glow);
+        atk.trailGeom.dispose();
+        atk.trailMat.dispose();
+        atk.projMat.dispose();
+        atk.glowMat.dispose();
         attacks.splice(i, 1);
       }
     }
 
-    // Title
-    ctx.font = '9px "Share Tech Mono"';
-    ctx.fillStyle = 'rgba(0,255,255,0.6)';
-    ctx.fillText('GLOBAL THREAT MAP', 4, 12);
-    ctx.fillStyle = 'rgba(255,0,64,0.6)';
-    ctx.fillText(`● ATTACKS: ${attacks.length} ACTIVE`, 4, h - 8);
+    // Update impacts
+    for (let i = impacts.length - 1; i >= 0; i--) {
+      const imp = impacts[i];
+      imp.scale += 0.08;
+      imp.life -= 0.02;
+      imp.ring.scale.set(imp.scale, imp.scale, imp.scale);
+      imp.ringMat.opacity = Math.max(0, imp.life);
+      if (imp.life <= 0) {
+        globeGroup.remove(imp.ring);
+        imp.ringMat.dispose();
+        impacts.splice(i, 1);
+      }
+    }
 
-    requestAnimationFrame(draw);
+    // Render
+    renderer.render(scene, camera);
+
+    // --- HUD overlay ---
+    const hctx = hudCanvas.getContext('2d');
+    hctx.clearRect(0, 0, w, h);
+
+    // Title
+    hctx.font = '10px "Share Tech Mono"';
+    hctx.fillStyle = 'rgba(0,255,255,0.7)';
+    hctx.fillText('◆ GLOBAL THREAT MAP // 3D SIGINT', 6, 14);
+
+    // Stats
+    hctx.font = '9px "Share Tech Mono"';
+    hctx.fillStyle = 'rgba(255,0,64,0.7)';
+    hctx.fillText(`● ACTIVE ATTACKS: ${activeAttackCount}`, 6, h - 26);
+    hctx.fillStyle = 'rgba(0,255,65,0.5)';
+    hctx.fillText(`NODES: ${cities.length} | THREATS: ${cities.filter(c=>c.threat).length} | ROT: ${(globeGroup.rotation.y % (Math.PI*2)).toFixed(2)}rad`, 6, h - 12);
+
+    // Project city labels to 2D
+    cities.forEach(c => {
+      const worldPos = c._pos.clone();
+      worldPos.applyMatrix4(globeGroup.matrixWorld);
+
+      // Check if on front side of globe (facing camera)
+      const camDir = new THREE.Vector3();
+      camera.getWorldDirection(camDir);
+      const toCity = worldPos.clone().sub(camera.position).normalize();
+      const dot = worldPos.clone().normalize().dot(camera.position.clone().normalize());
+
+      if (dot > 0.1) { // front-facing
+        const projected = worldPos.clone().project(camera);
+        const sx = (projected.x * 0.5 + 0.5) * w;
+        const sy = (-projected.y * 0.5 + 0.5) * h;
+
+        if (sx > 0 && sx < w && sy > 0 && sy < h) {
+          hctx.font = '8px "Share Tech Mono"';
+          hctx.fillStyle = c.threat ? 'rgba(255,0,64,0.8)' : 'rgba(0,255,255,0.8)';
+          hctx.fillText(c.name, sx + 6, sy - 4);
+
+          // Tiny crosshair
+          hctx.strokeStyle = c.threat ? 'rgba(255,0,64,0.4)' : 'rgba(0,255,65,0.4)';
+          hctx.lineWidth = 0.5;
+          hctx.beginPath();
+          hctx.moveTo(sx - 4, sy); hctx.lineTo(sx + 4, sy);
+          hctx.moveTo(sx, sy - 4); hctx.lineTo(sx, sy + 4);
+          hctx.stroke();
+        }
+      }
+    });
+
+    // Corner decorations
+    hctx.strokeStyle = 'rgba(0,255,65,0.2)';
+    hctx.lineWidth = 1;
+    const cs = 15;
+    // Top-left
+    hctx.beginPath(); hctx.moveTo(0, cs); hctx.lineTo(0, 0); hctx.lineTo(cs, 0); hctx.stroke();
+    // Top-right
+    hctx.beginPath(); hctx.moveTo(w-cs, 0); hctx.lineTo(w, 0); hctx.lineTo(w, cs); hctx.stroke();
+    // Bottom-left
+    hctx.beginPath(); hctx.moveTo(0, h-cs); hctx.lineTo(0, h); hctx.lineTo(cs, h); hctx.stroke();
+    // Bottom-right
+    hctx.beginPath(); hctx.moveTo(w-cs, h); hctx.lineTo(w, h); hctx.lineTo(w, h-cs); hctx.stroke();
   }
-  draw();
+
+  animate();
 }
 
 // --- PROCESS LIST ---
