@@ -326,6 +326,8 @@
     opacity: 0.9;
     overflow-y: auto;
     height: 100%;
+    white-space: pre;
+    font-family: 'Share Tech Mono', monospace;
   }
 
   /* SELECTION BOX */
@@ -2020,7 +2022,7 @@ function createHexDump(body) {
         Math.random() > 0.95 ? `<span style="color:var(--cyan)">${b}</span>` : b
       );
 
-      html += `<span style="color:var(--cyan)">${addr}</span>  ${highlighted.join(' ')}  <span style="color:#666">${ascii}</span>\n`;
+      html += `<span style="color:var(--cyan)">${addr}</span>  <span style="color:var(--green)">${highlighted.join(' ')}</span>  <span style="color:#666">${ascii}</span>\n`;
     }
     container.innerHTML = html;
     setTimeout(updateHex, 500);
