@@ -309,21 +309,7 @@
   }
 
   /* EQ BARS */
-  .eq-container {
-    display: flex;
-    align-items: flex-end;
-    gap: 2px;
-    height: 100%;
-    padding: 4px;
-  }
-
-  .eq-bar {
-    flex: 1;
-    background: linear-gradient(to top, var(--green), var(--cyan), var(--red));
-    min-width: 3px;
-    transition: height 0.08s ease;
-    border-radius: 1px 1px 0 0;
-  }
+  /* EQ styles removed — now WebGL */
 
   /* WORLD MAP */
   .world-map-container {
@@ -1463,275 +1449,282 @@ function timestamp() {
   return d.toTimeString().split(' ')[0] + '.' + d.getMilliseconds().toString().padStart(3, '0');
 }
 
-// --- NETWORK GRAPH (Canvas based) ---
+// ============================================================
+// WEBGL PANEL HELPER — reusable full-screen-quad shader runner
+// ============================================================
+function createGLPanel(body, fragSrc, opts = {}) {
+  const canvas = document.createElement('canvas');
+  canvas.className = 'graph-canvas';
+  body.appendChild(canvas);
+
+  const gl = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: false, antialias: false }) ||
+             canvas.getContext('experimental-webgl', { alpha: true, premultipliedAlpha: false });
+  if (!gl) { console.warn('WebGL unavailable for panel'); return null; }
+
+  const vertSrc = `attribute vec2 a;varying vec2 v;void main(){v=a*.5+.5;gl_Position=vec4(a,0,1);}`;
+
+  function compile(src, type) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader error:', gl.getShaderInfoLog(s), src.split('\\n').slice(0,5));
+      return null;
+    }
+    return s;
+  }
+  const vs = compile(vertSrc, gl.VERTEX_SHADER);
+  const fs = compile(fragSrc, gl.FRAGMENT_SHADER);
+  if (!vs || !fs) return null;
+  const prog = gl.createProgram();
+  gl.attachShader(prog, vs); gl.attachShader(prog, fs);
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Link error:', gl.getProgramInfoLog(prog)); return null;
+  }
+  gl.useProgram(prog);
+
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,1,-1,-1,1,1,1]), gl.STATIC_DRAW);
+  const a = gl.getAttribLocation(prog, 'a');
+  gl.enableVertexAttribArray(a);
+  gl.vertexAttribPointer(a, 2, gl.FLOAT, false, 0, 0);
+
+  const uTime = gl.getUniformLocation(prog, 'T');
+  const uRes = gl.getUniformLocation(prog, 'R');
+
+  // Extra uniforms
+  const extraLocs = {};
+  if (opts.uniforms) {
+    for (const name of opts.uniforms) {
+      extraLocs[name] = gl.getUniformLocation(prog, name);
+    }
+  }
+
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+  const t0 = Date.now();
+  function frame() {
+    if (!document.body.contains(canvas)) return;
+    const w = canvas.parentElement.clientWidth;
+    const h = canvas.parentElement.clientHeight;
+    if (w === 0 || h === 0) { requestAnimationFrame(frame); return; }
+    canvas.width = w; canvas.height = h;
+    gl.viewport(0, 0, w, h);
+    gl.useProgram(prog);
+    gl.uniform1f(uTime, (Date.now() - t0) / 1000.0);
+    gl.uniform2f(uRes, w, h);
+    if (opts.onFrame) opts.onFrame(gl, extraLocs);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    requestAnimationFrame(frame);
+  }
+  frame();
+  return { canvas, gl, prog, extraLocs };
+}
+
+// --- NETWORK GRAPH (WebGL) ---
 function createNetworkGraph(body) {
-  const canvas = document.createElement('canvas');
-  canvas.className = 'graph-canvas';
-  body.appendChild(canvas);
-
-  const nodes = Array.from({length: 30}, (_, i) => ({
-    x: rand(30, 370), y: rand(30, 270),
-    vx: rand(-0.3, 0.3), vy: rand(-0.3, 0.3),
-    r: rand(3, 8), color: pick(['#00ff41', '#00ffff', '#ff0040', '#ffbf00', '#bf00ff']),
-    label: pick(['SRV', 'NOD', 'GW', 'FW', 'DB', 'API', 'DNS', 'TOR', 'VPN', 'BOT']) + '-' + randInt(1,99),
-    pulse: rand(0, Math.PI * 2),
-  }));
-
-  const edges = [];
-  for (let i = 0; i < nodes.length; i++) {
-    const numConn = randInt(1, 3);
-    for (let j = 0; j < numConn; j++) {
-      const target = randInt(0, nodes.length);
-      if (target !== i) edges.push([i, target, rand(0.2, 1)]);
+  // 20 procedural nodes with edges — all in shader
+  createGLPanel(body, `
+    precision highp float;
+    varying vec2 v;
+    uniform float T;
+    uniform vec2 R;
+    float hash(float n){return fract(sin(n)*43758.5453);}
+    vec2 nodePos(float id){
+      // Drifting node positions
+      float s=hash(id*1.17)*0.5+0.3;
+      return vec2(
+        0.1+hash(id*2.31)*0.8+sin(T*s*0.3+id*3.0)*0.06,
+        0.1+hash(id*3.47)*0.8+cos(T*s*0.25+id*5.0)*0.06
+      );
     }
-  }
-
-  let hoveredNode = null;
-
-  canvas.addEventListener('mousemove', e => {
-    const rect = canvas.getBoundingClientRect();
-    const mx = (e.clientX - rect.left) * (canvas.width / rect.width);
-    const my = (e.clientY - rect.top) * (canvas.height / rect.height);
-    hoveredNode = null;
-    for (const n of nodes) {
-      if (Math.hypot(n.x - mx, n.y - my) < n.r + 5) { hoveredNode = n; break; }
+    vec3 nodeColor(float id){
+      float h=hash(id*4.59);
+      if(h<0.3) return vec3(0.0,1.0,0.25);  // green
+      if(h<0.5) return vec3(0.0,1.0,1.0);    // cyan
+      if(h<0.7) return vec3(1.0,0.75,0.0);   // amber
+      if(h<0.85) return vec3(1.0,0.0,0.25);  // red
+      return vec3(0.75,0.0,1.0);              // purple
     }
-    canvas.style.cursor = hoveredNode ? 'pointer' : 'crosshair';
-  });
-
-  canvas.addEventListener('click', e => {
-    if (hoveredNode) {
-      notify(`Node ${hoveredNode.label}: ${ipAddr()} [${pick(['ACTIVE','IDLE','SCANNING','ENCRYPTED'])}]`);
-    }
-  });
-
-  function animate() {
-    if (!document.body.contains(canvas)) return;
-    const w = canvas.parentElement.clientWidth;
-    const h = canvas.parentElement.clientHeight;
-    canvas.width = w; canvas.height = h;
-    const ctx = canvas.getContext('2d');
-
-    // Edges
-    for (const [a, b, opacity] of edges) {
-      ctx.beginPath();
-      ctx.moveTo(nodes[a].x, nodes[a].y);
-      ctx.lineTo(nodes[b].x, nodes[b].y);
-      ctx.strokeStyle = `rgba(0,255,65,${opacity * 0.3})`;
-      ctx.lineWidth = 0.5;
-      ctx.stroke();
-
-      // Packet animation
-      if (Math.random() > 0.98) {
-        const t = (Date.now() % 2000) / 2000;
-        const px = nodes[a].x + (nodes[b].x - nodes[a].x) * t;
-        const py = nodes[a].y + (nodes[b].y - nodes[a].y) * t;
-        ctx.beginPath();
-        ctx.arc(px, py, 2, 0, Math.PI * 2);
-        ctx.fillStyle = '#00ffff';
-        ctx.fill();
+    void main(){
+      vec2 uv=v;
+      float aspect=R.x/R.y;
+      vec2 auv=uv*vec2(aspect,1.0);
+      float px=1.0/R.y;
+      vec3 col=vec3(0.0);
+      float N=20.0;
+      // Edges (draw first, underneath)
+      for(int i=0;i<20;i++){
+        float fi=float(i);
+        vec2 a=nodePos(fi)*vec2(aspect,1.0);
+        // Connect to 1-2 other nodes
+        for(int j=0;j<2;j++){
+          float target=mod(fi+1.0+float(j)*7.0,N);
+          vec2 b=nodePos(target)*vec2(aspect,1.0);
+          // Distance from point to line segment
+          vec2 pa=auv-a,ba=b-a;
+          float t=clamp(dot(pa,ba)/dot(ba,ba),0.0,1.0);
+          float d=length(pa-ba*t);
+          float op=hash(fi*5.0+float(j)*3.0)*0.3;
+          col+=vec3(0.0,1.0,0.25)*op*smoothstep(1.5*px,0.0,d);
+          // Packet traveling along edge
+          float pktT=fract(T*0.4+hash(fi*7.0+float(j)*11.0));
+          vec2 pktPos=mix(a,b,pktT);
+          float pktD=length(auv-pktPos);
+          col+=vec3(0.0,1.0,1.0)*0.6*smoothstep(3.0*px,0.0,pktD);
+        }
       }
+      // Nodes
+      for(int i=0;i<20;i++){
+        float fi=float(i);
+        vec2 np=nodePos(fi)*vec2(aspect,1.0);
+        float d=length(auv-np);
+        float r=(0.006+hash(fi*6.11)*0.008)*(1.0+sin(T*2.0+hash(fi)*6.28)*0.3);
+        vec3 nc=nodeColor(fi);
+        // Glow
+        col+=nc*0.1*smoothstep(r+0.03,r,d);
+        // Node body
+        col+=nc*smoothstep(r+px,r-px,d);
+      }
+      gl_FragColor=vec4(col,1.0);
     }
-
-    // Nodes
-    const time = Date.now() / 1000;
-    for (const n of nodes) {
-      n.x += n.vx; n.y += n.vy;
-      if (n.x < 10 || n.x > w - 10) n.vx *= -1;
-      if (n.y < 10 || n.y > h - 10) n.vy *= -1;
-
-      const pulseR = n.r + Math.sin(time * 2 + n.pulse) * 2;
-
-      // Glow
-      ctx.beginPath();
-      ctx.arc(n.x, n.y, pulseR + 8, 0, Math.PI * 2);
-      ctx.fillStyle = n.color.replace(')', ',0.1)').replace('rgb', 'rgba');
-      ctx.fill();
-
-      // Node
-      ctx.beginPath();
-      ctx.arc(n.x, n.y, pulseR, 0, Math.PI * 2);
-      ctx.fillStyle = n === hoveredNode ? '#ffffff' : n.color;
-      ctx.fill();
-
-      // Label
-      ctx.font = '8px "Share Tech Mono"';
-      ctx.fillStyle = 'rgba(0,255,65,0.7)';
-      ctx.fillText(n.label, n.x + n.r + 4, n.y + 3);
-    }
-
-    requestAnimationFrame(animate);
-  }
-  animate();
+  `);
 }
 
-// --- GRAPHIC EQ ---
+// --- GRAPHIC EQ (WebGL) ---
 function createEQ(body) {
-  const container = document.createElement('div');
-  container.className = 'eq-container';
-  body.appendChild(container);
-
-  const numBars = 48;
-  const bars = [];
-  for (let i = 0; i < numBars; i++) {
-    const bar = document.createElement('div');
-    bar.className = 'eq-bar';
-    container.appendChild(bar);
-    bars.push(bar);
-  }
-
-  function animateEQ() {
-    if (!document.body.contains(container)) return;
-    const time = Date.now() / 1000;
-    for (let i = 0; i < bars.length; i++) {
-      const h = Math.abs(Math.sin(time * 3 + i * 0.3)) * 60 +
-                Math.abs(Math.sin(time * 7 + i * 0.5)) * 30 +
-                Math.random() * 10;
-      bars[i].style.height = h + '%';
-    }
-    requestAnimationFrame(animateEQ);
-  }
-  animateEQ();
-}
-
-// --- WAVEFORM ---
-function createWaveform(body) {
-  const canvas = document.createElement('canvas');
-  canvas.className = 'graph-canvas';
-  body.appendChild(canvas);
-
-  function draw() {
-    if (!document.body.contains(canvas)) return;
-    const w = canvas.parentElement.clientWidth;
-    const h = canvas.parentElement.clientHeight;
-    canvas.width = w; canvas.height = h;
-    const ctx = canvas.getContext('2d');
-    const time = Date.now() / 1000;
-
-    // Multiple waveforms
-    const waves = [
-      { freq: 3, amp: 0.3, color: 'rgba(0,255,65,0.8)', width: 2 },
-      { freq: 5, amp: 0.2, color: 'rgba(0,255,255,0.6)', width: 1.5 },
-      { freq: 8, amp: 0.15, color: 'rgba(255,0,64,0.4)', width: 1 },
-      { freq: 12, amp: 0.1, color: 'rgba(191,0,255,0.3)', width: 1 },
-    ];
-
-    // Grid
-    ctx.strokeStyle = 'rgba(0,68,0,0.3)';
-    ctx.lineWidth = 0.5;
-    for (let x = 0; x < w; x += 20) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
-    for (let y = 0; y < h; y += 20) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
-
-    // Center line
-    ctx.strokeStyle = 'rgba(0,68,0,0.6)';
-    ctx.beginPath(); ctx.moveTo(0, h/2); ctx.lineTo(w, h/2); ctx.stroke();
-
-    for (const wave of waves) {
-      ctx.beginPath();
-      ctx.strokeStyle = wave.color;
-      ctx.lineWidth = wave.width;
-      for (let x = 0; x < w; x++) {
-        const y = h/2 + Math.sin(x * 0.02 * wave.freq + time * wave.freq) * h * wave.amp +
-                  Math.sin(x * 0.01 * wave.freq + time * 2) * h * wave.amp * 0.5;
-        x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  createGLPanel(body, `
+    precision highp float;
+    varying vec2 v;
+    uniform float T;
+    uniform vec2 R;
+    float hash(float n){return fract(sin(n)*43758.5453);}
+    void main(){
+      vec2 uv=v;
+      float px=1.0/R.y;
+      float pxX=1.0/R.x;
+      vec3 col=vec3(0.0);
+      float numBars=48.0;
+      float gap=2.0/R.x;
+      float totalW=1.0;
+      float barW=(totalW-gap*(numBars-1.0))/numBars;
+      float idx=floor(uv.x/(barW+gap));
+      float localX=uv.x-idx*(barW+gap);
+      if(idx>=0.0 && idx<numBars && localX<barW && localX>0.0){
+        float fi=idx;
+        // Animated height matching original: abs(sin)*0.6+abs(sin)*0.3+random*0.1
+        float h=abs(sin(T*3.0+fi*0.3))*0.6
+               +abs(sin(T*7.0+fi*0.5))*0.3
+               +hash(fi+floor(T*12.0))*0.1;
+        h=clamp(h,0.02,0.98);
+        if(uv.y<h){
+          float gradT=uv.y/h;
+          // Gradient: green(bottom) → cyan(mid) → red(top)
+          vec3 barCol;
+          if(gradT<0.5){
+            barCol=mix(vec3(0.0,1.0,0.25),vec3(0.0,1.0,1.0),gradT*2.0);
+          }else{
+            barCol=mix(vec3(0.0,1.0,1.0),vec3(1.0,0.0,0.25),(gradT-0.5)*2.0);
+          }
+          col=barCol*0.85;
+          // Slight glow at the top of each bar
+          col+=barCol*0.3*smoothstep(4.0*px,0.0,abs(uv.y-h));
+          // Rounded top cap
+          col*=smoothstep(0.0,2.0*px,h-uv.y+1.5*px);
+        }
+        // Bright top edge glow even above bar
+        float fi2=idx;
+        float h2=abs(sin(T*3.0+fi2*0.3))*0.6
+                +abs(sin(T*7.0+fi2*0.5))*0.3
+                +hash(fi2+floor(T*12.0))*0.1;
+        h2=clamp(h2,0.02,0.98);
+        col+=vec3(1.0,1.0,1.0)*0.15*smoothstep(3.0*px,0.0,abs(uv.y-h2));
       }
-      ctx.stroke();
+      gl_FragColor=vec4(col,1.0);
     }
-
-    // Measurement crosshair
-    ctx.setLineDash([3, 3]);
-    ctx.strokeStyle = 'rgba(255,191,0,0.4)';
-    const cx = w * (0.5 + 0.3 * Math.sin(time * 0.5));
-    ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, h); ctx.stroke();
-    ctx.setLineDash([]);
-
-    // Value readout
-    ctx.font = '9px "Share Tech Mono"';
-    ctx.fillStyle = '#ffbf00';
-    ctx.fillText(`f=${(Math.sin(time)*500+1000).toFixed(1)}Hz`, cx + 5, 15);
-    ctx.fillText(`A=${(Math.sin(time*2)*0.5+0.5).toFixed(3)}V`, cx + 5, 27);
-
-    requestAnimationFrame(draw);
-  }
-  draw();
+  `);
 }
 
-// --- LIVE CHART (like stock/monitoring) ---
-function createLiveChart(body, opts = {}) {
-  const canvas = document.createElement('canvas');
-  canvas.className = 'graph-canvas';
-  body.appendChild(canvas);
-
-  const datasets = [
-    { data: [], color: '#00ff41', label: opts.label1 || 'THROUGHPUT' },
-    { data: [], color: '#00ffff', label: opts.label2 || 'LATENCY' },
-    { data: [], color: '#ff0040', label: opts.label3 || 'ERRORS' },
-  ];
-
-  // Seed data
-  datasets.forEach(ds => {
-    for (let i = 0; i < 100; i++) ds.data.push(rand(10, 90));
-  });
-
-  function draw() {
-    if (!document.body.contains(canvas)) return;
-    const w = canvas.parentElement.clientWidth;
-    const h = canvas.parentElement.clientHeight;
-    canvas.width = w; canvas.height = h;
-    const ctx = canvas.getContext('2d');
-
-    // Push new data
-    datasets.forEach(ds => {
-      const last = ds.data[ds.data.length - 1];
-      ds.data.push(Math.max(5, Math.min(95, last + rand(-8, 8))));
-      if (ds.data.length > 200) ds.data.shift();
-    });
-
-    // Grid
-    ctx.strokeStyle = 'rgba(0,68,0,0.3)';
-    ctx.lineWidth = 0.5;
-    for (let y = 0; y < h; y += h/5) {
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
-      ctx.font = '8px "Share Tech Mono"';
-      ctx.fillStyle = 'rgba(0,255,65,0.4)';
-      ctx.fillText(Math.round((1 - y/h) * 100), 2, y + 10);
+// --- WAVEFORM (WebGL) ---
+function createWaveform(body) {
+  createGLPanel(body, `
+    precision highp float;
+    varying vec2 v;
+    uniform float T;
+    uniform vec2 R;
+    void main(){
+      vec2 uv=v; float px=1.0/R.y;
+      // Grid
+      vec2 g=mod(uv*R,20.0);
+      float grid=step(g.x,1.0)+step(g.y,1.0);
+      vec3 col=vec3(0.0,0.27,0.0)*grid*0.3;
+      // Center line
+      col+=vec3(0.0,0.27,0.0)*0.6*smoothstep(1.5*px,0.0,abs(uv.y-0.5));
+      // Waves
+      float y=uv.y;
+      // Wave 1: green
+      float w1=0.5+sin(uv.x*6.28*3.0+T*3.0)*0.3+sin(uv.x*3.14*3.0+T*2.0)*0.15;
+      col+=vec3(0.0,1.0,0.25)*0.8*smoothstep(2.5*px,0.0,abs(y-w1));
+      // Wave 2: cyan
+      float w2=0.5+sin(uv.x*6.28*5.0+T*5.0)*0.2+sin(uv.x*3.14*5.0+T*2.0)*0.1;
+      col+=vec3(0.0,1.0,1.0)*0.6*smoothstep(2.0*px,0.0,abs(y-w2));
+      // Wave 3: red
+      float w3=0.5+sin(uv.x*6.28*8.0+T*8.0)*0.15+sin(uv.x*3.14*8.0+T*2.0)*0.075;
+      col+=vec3(1.0,0.0,0.25)*0.4*smoothstep(1.5*px,0.0,abs(y-w3));
+      // Wave 4: purple
+      float w4=0.5+sin(uv.x*6.28*12.0+T*12.0)*0.1+sin(uv.x*3.14*12.0+T*2.0)*0.05;
+      col+=vec3(0.75,0.0,1.0)*0.3*smoothstep(1.5*px,0.0,abs(y-w4));
+      // Measurement crosshair
+      float cx=0.5+0.3*sin(T*0.5);
+      float dash=step(0.5,fract(uv.y*R.y/6.0));
+      col+=vec3(1.0,0.75,0.0)*0.4*smoothstep(1.5*px,0.0,abs(uv.x-cx))*dash;
+      gl_FragColor=vec4(col,1.0);
     }
+  `);
+}
 
-    // Lines
-    datasets.forEach(ds => {
-      ctx.beginPath();
-      ctx.strokeStyle = ds.color;
-      ctx.lineWidth = 1.5;
-      const step = w / (ds.data.length - 1);
-      ds.data.forEach((v, i) => {
-        const x = i * step;
-        const y = h - (v / 100) * h;
-        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-      });
-      ctx.stroke();
-
-      // Fill
-      ctx.lineTo(w, h);
-      ctx.lineTo(0, h);
-      ctx.fillStyle = ds.color.replace(')', ',0.05)').replace('rgb', 'rgba').replace('#', '');
-      // Convert hex to rgba for fill
-      const r = parseInt(ds.color.slice(1,3),16);
-      const g = parseInt(ds.color.slice(3,5),16);
-      const b = parseInt(ds.color.slice(5,7),16);
-      ctx.fillStyle = `rgba(${r},${g},${b},0.05)`;
-      ctx.fill();
-    });
-
-    // Legend
-    datasets.forEach((ds, i) => {
-      ctx.font = '9px "Share Tech Mono"';
-      ctx.fillStyle = ds.color;
-      ctx.fillText(`■ ${ds.label}: ${ds.data[ds.data.length-1].toFixed(1)}`, w - 140, 14 + i * 14);
-    });
-
-    requestAnimationFrame(draw);
-  }
-  draw();
+// --- LIVE CHART (WebGL) ---
+function createLiveChart(body, opts = {}) {
+  createGLPanel(body, `
+    precision highp float;
+    varying vec2 v;
+    uniform float T;
+    uniform vec2 R;
+    float hash(float n){return fract(sin(n)*43758.5453);}
+    float noise(float x){float i=floor(x);float f=fract(x);return mix(hash(i),hash(i+1.0),f*f*(3.0-2.0*f));}
+    float fbm(float x){return noise(x)*0.5+noise(x*2.0)*0.3+noise(x*4.0)*0.2;}
+    void main(){
+      vec2 uv=v; float px=1.0/R.y;
+      vec3 col=vec3(0.0);
+      // Grid
+      float gy=step(mod(uv.y*5.0,1.0),0.005*5.0);
+      col+=vec3(0.0,0.27,0.0)*gy*0.3;
+      // 3 data lines: green, cyan, red — scrolling procedural noise
+      float scroll=T*0.3;
+      float x=uv.x*8.0+scroll;
+      // Line 1: green throughput
+      float v1=0.3+fbm(x*1.1+10.0)*0.5;
+      float d1=uv.y-v1;
+      col+=vec3(0.0,1.0,0.25)*0.9*smoothstep(2.5*px,0.0,abs(d1));
+      col+=vec3(0.0,1.0,0.25)*0.05*smoothstep(0.0,0.001,d1)*smoothstep(d1,0.0,-0.3); // fill below
+      // Line 2: cyan latency
+      float v2=0.4+fbm(x*1.3+50.0)*0.4;
+      float d2=uv.y-v2;
+      col+=vec3(0.0,1.0,1.0)*0.7*smoothstep(2.0*px,0.0,abs(d2));
+      col+=vec3(0.0,1.0,1.0)*0.04*smoothstep(0.0,0.001,d2)*smoothstep(d2,0.0,-0.3);
+      // Line 3: red errors
+      float v3=0.15+fbm(x*1.7+90.0)*0.25;
+      float d3=uv.y-v3;
+      col+=vec3(1.0,0.0,0.25)*0.5*smoothstep(2.0*px,0.0,abs(d3));
+      col+=vec3(1.0,0.0,0.25)*0.03*smoothstep(0.0,0.001,d3)*smoothstep(d3,0.0,-0.2);
+      gl_FragColor=vec4(col,1.0);
+    }
+  `);
 }
 
 // --- HEX DUMP ---
@@ -1766,115 +1759,72 @@ function createHexDump(body) {
   updateHex();
 }
 
-// --- RADAR ---
+// --- RADAR (WebGL) ---
 function createRadar(body) {
-  const canvas = document.createElement('canvas');
-  canvas.className = 'graph-canvas';
-  body.appendChild(canvas);
-
-  const blips = Array.from({length: 12}, () => ({
-    angle: rand(0, Math.PI * 2),
-    dist: rand(0.1, 0.9),
-    fadeIn: rand(0, Math.PI * 2),
-    label: pick(['UAV','SAT','SIG','TGT','UNK','DRONE','BOGEY']) + '-' + randInt(1,99),
-    threat: Math.random() > 0.7,
-  }));
-
-  function draw() {
-    if (!document.body.contains(canvas)) return;
-    const w = canvas.parentElement.clientWidth;
-    const h = canvas.parentElement.clientHeight;
-    canvas.width = w; canvas.height = h;
-    const ctx = canvas.getContext('2d');
-    const cx = w/2, cy = h/2;
-    const r = Math.min(cx, cy) - 20;
-    const time = Date.now() / 1000;
-    const sweep = (time * 0.8) % (Math.PI * 2);
-
-    // Rings
-    for (let i = 1; i <= 4; i++) {
-      ctx.beginPath();
-      ctx.arc(cx, cy, r * i / 4, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(0,255,65,0.2)';
-      ctx.lineWidth = 0.5;
-      ctx.stroke();
-    }
-
-    // Cross
-    ctx.strokeStyle = 'rgba(0,255,65,0.15)';
-    ctx.beginPath(); ctx.moveTo(cx-r, cy); ctx.lineTo(cx+r, cy); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(cx, cy-r); ctx.lineTo(cx, cy+r); ctx.stroke();
-
-    // Sweep
-    const gradient = ctx.createConicalGradient ? null : null; // Fallback
-    ctx.beginPath();
-    ctx.moveTo(cx, cy);
-    ctx.arc(cx, cy, r, sweep - 0.5, sweep);
-    ctx.fillStyle = 'rgba(0,255,65,0.15)';
-    ctx.fill();
-
-    // Sweep line
-    ctx.beginPath();
-    ctx.moveTo(cx, cy);
-    ctx.lineTo(cx + Math.cos(sweep) * r, cy + Math.sin(sweep) * r);
-    ctx.strokeStyle = 'rgba(0,255,65,0.8)';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    // Blips
-    for (const b of blips) {
-      const bx = cx + Math.cos(b.angle) * b.dist * r;
-      const by = cy + Math.sin(b.angle) * b.dist * r;
-
-      // Fade based on sweep
-      let diff = sweep - b.angle;
-      if (diff < 0) diff += Math.PI * 2;
-      const alpha = Math.max(0, 1 - diff / (Math.PI * 1.5));
-
-      if (alpha > 0.05) {
-        ctx.beginPath();
-        ctx.arc(bx, by, 3, 0, Math.PI * 2);
-        const col = b.threat ? `rgba(255,0,64,${alpha})` : `rgba(0,255,65,${alpha})`;
-        ctx.fillStyle = col;
-        ctx.fill();
-
-        if (alpha > 0.3) {
-          ctx.font = '7px "Share Tech Mono"';
-          ctx.fillStyle = `rgba(0,255,255,${alpha * 0.8})`;
-          ctx.fillText(b.label, bx + 6, by - 4);
-        }
+  createGLPanel(body, `
+    precision highp float;
+    varying vec2 v;
+    uniform float T;
+    uniform vec2 R;
+    float hash(float n){return fract(sin(n)*43758.5453);}
+    #define PI 3.14159265
+    #define TAU 6.28318530
+    void main(){
+      float aspect=R.x/R.y;
+      vec2 uv=(v-0.5)*vec2(aspect,1.0);
+      float dist=length(uv);
+      float maxR=min(aspect,1.0)*0.5-0.05;
+      float angle=atan(uv.y,uv.x);
+      float px=1.0/R.y;
+      vec3 col=vec3(0.0);
+      // Rings
+      for(int i=1;i<=4;i++){
+        float r=maxR*float(i)/4.0;
+        col+=vec3(0.0,1.0,0.25)*0.2*smoothstep(1.5*px,0.0,abs(dist-r));
       }
-
-      // Slowly move blips
-      b.angle += rand(-0.002, 0.002);
-      b.dist = Math.max(0.05, Math.min(0.95, b.dist + rand(-0.001, 0.001)));
+      // Cross
+      float onDisk=step(dist,maxR);
+      col+=vec3(0.0,1.0,0.25)*0.12*smoothstep(1.0*px,0.0,abs(uv.x))*onDisk;
+      col+=vec3(0.0,1.0,0.25)*0.12*smoothstep(1.0*px,0.0,abs(uv.y))*onDisk;
+      // Sweep
+      float sweep=mod(T*0.8,TAU);
+      float a=mod(angle-sweep+TAU,TAU);
+      float sweepTrail=smoothstep(0.6,0.0,a)*0.2*step(dist,maxR);
+      col+=vec3(0.0,1.0,0.25)*sweepTrail;
+      // Sweep line
+      float sweepLine=smoothstep(2.5*px,0.0,abs(a))*step(dist,maxR)*smoothstep(0.0,0.01,dist);
+      col+=vec3(0.0,1.0,0.25)*0.8*sweepLine;
+      // Blips (12 procedural)
+      for(int i=0;i<12;i++){
+        float fi=float(i);
+        float ba=hash(fi*1.17)*TAU+sin(T*0.05+fi)*0.3;
+        float bd=0.15+hash(fi*2.31)*0.7;
+        vec2 bp=vec2(cos(ba),sin(ba))*bd*maxR;
+        float bDist=length(uv-bp);
+        // Fade from sweep
+        float diff=mod(sweep-ba+TAU,TAU);
+        float alpha=max(0.0,1.0-diff/(PI*1.5));
+        bool threat=hash(fi*3.47)>0.7;
+        vec3 bc=threat?vec3(1.0,0.0,0.25):vec3(0.0,1.0,0.25);
+        col+=bc*alpha*smoothstep(4.0*px,0.0,bDist);
+      }
+      // Center dot
+      col+=vec3(0.0,1.0,0.25)*smoothstep(3.0*px,0.0,dist);
+      // Clip to disk
+      col*=smoothstep(maxR+px,maxR-px,dist);
+      gl_FragColor=vec4(col,1.0);
     }
-
-    // Center dot
-    ctx.beginPath();
-    ctx.arc(cx, cy, 3, 0, Math.PI * 2);
-    ctx.fillStyle = '#00ff41';
-    ctx.fill();
-
-    // Range text
-    ctx.font = '8px "Share Tech Mono"';
-    ctx.fillStyle = 'rgba(0,255,65,0.4)';
-    ctx.fillText('50km', cx + r/4, cy + 12);
-    ctx.fillText('100km', cx + r/2, cy + 12);
-    ctx.fillText('200km', cx + 3*r/4, cy + 12);
-
-    requestAnimationFrame(draw);
-  }
-  draw();
+  `);
 }
 
-// --- FAKE VIDEO FEED ---
+// --- FAKE VIDEO FEED (WebGL) ---
 function createVideoFeed(body, label) {
   const container = document.createElement('div');
   container.className = 'video-feed';
 
-  const canvas = document.createElement('canvas');
-  container.appendChild(canvas);
+  const feedBody = document.createElement('div');
+  feedBody.style.cssText = 'width:100%;height:100%;position:relative;';
+  container.appendChild(feedBody);
 
   const overlay = document.createElement('div');
   overlay.className = 'video-overlay rec';
@@ -1888,63 +1838,51 @@ function createVideoFeed(body, label) {
 
   body.appendChild(container);
 
-  function draw() {
-    if (!document.body.contains(canvas)) return;
-    const w = canvas.parentElement.clientWidth;
-    const h = canvas.parentElement.clientHeight;
-    canvas.width = w; canvas.height = h;
-    const ctx = canvas.getContext('2d');
-    const time = Date.now() / 1000;
+  // Update timestamp with DOM (cheap)
+  setInterval(() => {
+    if (!document.body.contains(overlay2)) return;
+    overlay2.textContent = `${new Date().toISOString()} | ${randInt(24,30)}fps`;
+  }, 500);
 
-    // Static noise background
-    const imgData = ctx.createImageData(w, h);
-    for (let i = 0; i < imgData.data.length; i += 4) {
-      const v = Math.random() * 25;
-      imgData.data[i] = v;
-      imgData.data[i+1] = v + Math.random() * 10;
-      imgData.data[i+2] = v;
-      imgData.data[i+3] = 255;
+  createGLPanel(feedBody, `
+    precision highp float;
+    varying vec2 v;
+    uniform float T;
+    uniform vec2 R;
+    float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+    void main(){
+      vec2 uv=v;
+      // Noise background (GPU noise — replaces CPU per-pixel loop)
+      float n=hash(uv*R+T*100.0)*0.1;
+      vec3 col=vec3(n*0.8,n+hash(uv*R+T*77.0)*0.04,n*0.8);
+      // 3 thermal blobs
+      for(int i=0;i<3;i++){
+        float fi=float(i);
+        vec2 bp=vec2(0.3+0.4*sin(T*0.3+fi*2.0),0.3+0.3*cos(T*0.2+fi*3.0));
+        float d=length(uv-bp);
+        float r=0.08+sin(T+fi)*0.03;
+        float blob=smoothstep(r,0.0,d)*0.3;
+        col+=vec3(0.0,blob,blob*0.4);
+        // Target box
+        vec2 diff=abs(uv-bp);
+        float boxS=0.07;
+        float px=1.0/R.y;
+        float box=smoothstep(1.5*px,0.0,abs(diff.x-boxS))*step(diff.y,boxS)
+                  +smoothstep(1.5*px,0.0,abs(diff.y-boxS))*step(diff.x,boxS);
+        col+=vec3(1.0,0.0,0.25)*0.6*box;
+      }
+      // Crosshair
+      float px=1.0/R.y;
+      col+=vec3(0.0,1.0,1.0)*0.3*smoothstep(1.0*px,0.0,abs(uv.x-0.5));
+      col+=vec3(0.0,1.0,1.0)*0.3*smoothstep(1.0*px,0.0,abs(uv.y-0.5));
+      float cd=abs(length((uv-0.5)*vec2(R.x/R.y,1.0))-0.08);
+      col+=vec3(0.0,1.0,1.0)*0.25*smoothstep(1.5*px,0.0,cd);
+      // Scanline
+      float scanY=fract(T*0.15);
+      col+=vec3(0.0,1.0,0.25)*0.05*smoothstep(3.0*px,0.0,abs(uv.y-scanY));
+      gl_FragColor=vec4(col,1.0);
     }
-    ctx.putImageData(imgData, 0, 0);
-
-    // Fake thermal blobs
-    for (let b = 0; b < 3; b++) {
-      const bx = w * (0.3 + 0.4 * Math.sin(time * 0.3 + b * 2));
-      const by = h * (0.3 + 0.3 * Math.cos(time * 0.2 + b * 3));
-      const gradient = ctx.createRadialGradient(bx, by, 0, bx, by, 30 + Math.sin(time + b) * 10);
-      gradient.addColorStop(0, 'rgba(0,255,65,0.3)');
-      gradient.addColorStop(0.5, 'rgba(0,255,65,0.1)');
-      gradient.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = gradient;
-      ctx.fillRect(0, 0, w, h);
-
-      // Box around blob
-      ctx.strokeStyle = 'rgba(255,0,64,0.6)';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(bx - 25, by - 25, 50, 50);
-      ctx.font = '7px "Share Tech Mono"';
-      ctx.fillStyle = 'rgba(255,0,64,0.8)';
-      ctx.fillText(`TGT-${b+1}`, bx - 23, by - 28);
-    }
-
-    // Crosshair
-    ctx.strokeStyle = 'rgba(0,255,255,0.3)';
-    ctx.lineWidth = 0.5;
-    ctx.beginPath(); ctx.moveTo(w/2, 0); ctx.lineTo(w/2, h); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(0, h/2); ctx.lineTo(w, h/2); ctx.stroke();
-    ctx.beginPath(); ctx.arc(w/2, h/2, 30, 0, Math.PI*2); ctx.stroke();
-
-    // Scanline
-    const scanY = (time * 100) % h;
-    ctx.fillStyle = 'rgba(0,255,65,0.05)';
-    ctx.fillRect(0, scanY, w, 3);
-
-    // Timestamp
-    overlay2.textContent = `${new Date().toISOString()} | ${w}x${h} | ${randInt(24,30)}fps`;
-
-    requestAnimationFrame(draw);
-  }
-  draw();
+  `);
 }
 
 // --- DATA TABLE ---
@@ -1992,207 +1930,141 @@ function createDataTable(body) {
   addRow();
 }
 
-// --- SPECTRUM / HEATMAP ---
+// --- SPECTRUM / HEATMAP (WebGL) ---
 function createSpectrum(body) {
-  const canvas = document.createElement('canvas');
-  canvas.className = 'graph-canvas';
-  body.appendChild(canvas);
-
-  const history = [];
-
-  function draw() {
-    if (!document.body.contains(canvas)) return;
-    const w = canvas.parentElement.clientWidth;
-    const h = canvas.parentElement.clientHeight;
-    canvas.width = w; canvas.height = h;
-    const ctx = canvas.getContext('2d');
-    const time = Date.now() / 1000;
-
-    // Generate new row
-    const cols = 64;
-    const row = [];
-    for (let i = 0; i < cols; i++) {
-      const v = Math.abs(Math.sin(time * 2 + i * 0.2)) * 0.5 +
-                Math.abs(Math.sin(time * 5 + i * 0.5)) * 0.3 +
-                Math.random() * 0.2;
-      row.push(Math.min(1, v));
+  createGLPanel(body, `
+    precision highp float;
+    varying vec2 v;
+    uniform float T;
+    uniform vec2 R;
+    float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+    void main(){
+      vec2 uv=v;
+      // Waterfall: x = frequency bin, y = time (scrolling down)
+      float freq=uv.x*64.0;
+      float timeRow=uv.y*60.0-T*4.0;
+      // Procedural spectrum intensity
+      float val=abs(sin(timeRow*0.2+freq*0.2))*0.5
+               +abs(sin(timeRow*0.5+freq*0.5))*0.3
+               +hash(vec2(floor(freq),floor(timeRow)))*0.2;
+      val=clamp(val,0.0,1.0);
+      // Heatmap color: black→green→yellow→red
+      vec3 col;
+      if(val<0.33){col=mix(vec3(0.0),vec3(0.0,1.0,0.0),val*3.0);}
+      else if(val<0.66){col=mix(vec3(0.0,1.0,0.0),vec3(1.0,1.0,0.0),(val-0.33)*3.0);}
+      else{col=mix(vec3(1.0,1.0,0.0),vec3(1.0,0.0,0.0),(val-0.66)*3.0);}
+      col*=0.8;
+      gl_FragColor=vec4(col,1.0);
     }
-    history.push(row);
-    if (history.length > 60) history.shift();
-
-    // Draw heatmap
-    const cellW = w / cols;
-    const cellH = h / 60;
-    for (let y = 0; y < history.length; y++) {
-      for (let x = 0; x < cols; x++) {
-        const v = history[y][x];
-        const r = Math.min(255, v * 500);
-        const g = Math.min(255, v * 255);
-        const b = Math.max(0, 50 - v * 100);
-        ctx.fillStyle = `rgb(${r},${g},${b})`;
-        ctx.fillRect(x * cellW, y * cellH, cellW + 1, cellH + 1);
-      }
-    }
-
-    // Labels
-    ctx.font = '8px "Share Tech Mono"';
-    ctx.fillStyle = 'rgba(0,255,255,0.8)';
-    ctx.fillText('FREQ SPECTRUM ANALYSIS', 4, 12);
-    ctx.fillText(`${(Math.sin(time)*500+2000).toFixed(0)}Hz - ${(Math.sin(time*0.5)*1000+5000).toFixed(0)}Hz`, 4, h - 4);
-
-    requestAnimationFrame(draw);
-  }
-  draw();
+  `);
 }
 
-// --- PIE/DONUT CHART ---
+// --- PIE/DONUT CHART (WebGL) ---
 function createDonutChart(body) {
-  const canvas = document.createElement('canvas');
-  canvas.className = 'graph-canvas';
-  body.appendChild(canvas);
-
-  const segments = [
-    { label: 'ENCRYPTED', value: 42, color: '#00ff41' },
-    { label: 'SUSPICIOUS', value: 23, color: '#ffbf00' },
-    { label: 'MALICIOUS', value: 15, color: '#ff0040' },
-    { label: 'UNKNOWN', value: 12, color: '#bf00ff' },
-    { label: 'CLEAN', value: 8, color: '#0080ff' },
-  ];
-
-  function draw() {
-    if (!document.body.contains(canvas)) return;
-    const w = canvas.parentElement.clientWidth;
-    const h = canvas.parentElement.clientHeight;
-    canvas.width = w; canvas.height = h;
-    const ctx = canvas.getContext('2d');
-    const cx = w * 0.4, cy = h / 2;
-    const r = Math.min(cx, cy) - 20;
-    const time = Date.now() / 1000;
-
-    // Wobble values slightly
-    const total = segments.reduce((s, seg) => s + seg.value, 0);
-    let angle = -Math.PI / 2 + Math.sin(time * 0.5) * 0.1;
-
-    for (const seg of segments) {
-      const sliceAngle = (seg.value / total) * Math.PI * 2;
-      ctx.beginPath();
-      ctx.arc(cx, cy, r, angle, angle + sliceAngle);
-      ctx.arc(cx, cy, r * 0.55, angle + sliceAngle, angle, true);
-      ctx.closePath();
-      ctx.fillStyle = seg.color;
-      ctx.globalAlpha = 0.8;
-      ctx.fill();
-      ctx.globalAlpha = 1;
-      ctx.strokeStyle = '#000';
-      ctx.lineWidth = 1;
-      ctx.stroke();
-
-      // Label
-      const midAngle = angle + sliceAngle / 2;
-      const lx = cx + Math.cos(midAngle) * (r * 0.78);
-      const ly = cy + Math.sin(midAngle) * (r * 0.78);
-      ctx.font = '8px "Share Tech Mono"';
-      ctx.fillStyle = '#fff';
-      ctx.fillText(`${Math.round(seg.value/total*100)}%`, lx - 10, ly + 3);
-
-      angle += sliceAngle;
+  createGLPanel(body, `
+    precision highp float;
+    varying vec2 v;
+    uniform float T;
+    uniform vec2 R;
+    #define PI 3.14159265
+    #define TAU 6.28318530
+    void main(){
+      float aspect=R.x/R.y;
+      // Center donut on left 60% of panel
+      vec2 center=vec2(0.35,0.5);
+      vec2 uv=(v-center)*vec2(aspect,1.0);
+      float dist=length(uv);
+      float angle=mod(atan(uv.y,uv.x)+PI*2.5+sin(T*0.5)*0.1,TAU);
+      float maxR=0.38;
+      float innerR=maxR*0.55;
+      float px=1.0/R.y;
+      vec3 col=vec3(0.0);
+      // 5 segments with fixed proportions (42,23,15,12,8 out of 100)
+      float cuts[6];
+      cuts[0]=0.0;cuts[1]=0.42;cuts[2]=0.65;cuts[3]=0.80;cuts[4]=0.92;cuts[5]=1.0;
+      // Wobble cuts slightly
+      float w1=sin(T*0.7)*0.01;float w2=sin(T*1.1)*0.01;
+      cuts[1]+=w1;cuts[2]+=w2;cuts[3]-=w1;cuts[4]+=w2;
+      vec3 colors[5];
+      colors[0]=vec3(0.0,1.0,0.25);  // green
+      colors[1]=vec3(1.0,0.75,0.0);  // amber
+      colors[2]=vec3(1.0,0.0,0.25);  // red
+      colors[3]=vec3(0.75,0.0,1.0);  // purple
+      colors[4]=vec3(0.0,0.5,1.0);   // blue
+      float angleNorm=angle/TAU;
+      if(dist>innerR && dist<maxR){
+        for(int i=0;i<5;i++){
+          if(angleNorm>=cuts[i] && angleNorm<cuts[i+1]){
+            col=colors[i]*0.8;
+            // Gap between segments
+            float gapA=smoothstep(0.0,0.008,angleNorm-cuts[i]);
+            float gapB=smoothstep(0.0,0.008,cuts[i+1]-angleNorm);
+            col*=gapA*gapB;
+          }
+        }
+        // Edge anti-alias
+        col*=smoothstep(innerR-px,innerR+px,dist)*smoothstep(maxR+px,maxR-px,dist);
+      }
+      // Legend dots on the right side
+      float lx=0.72*aspect;
+      for(int i=0;i<5;i++){
+        float fi=float(i);
+        vec2 lp=vec2(lx,(0.2+fi*0.14));
+        vec2 luv=(v-vec2(lp.x/aspect,lp.y))*vec2(aspect,1.0);
+        if(abs(luv.x)<0.012 && abs(luv.y)<0.012) col=colors[i];
+      }
+      gl_FragColor=vec4(col,1.0);
     }
-
-    // Center text
-    ctx.font = '10px "Orbitron"';
-    ctx.fillStyle = '#00ffff';
-    ctx.textAlign = 'center';
-    ctx.fillText('TRAFFIC', cx, cy - 4);
-    ctx.fillText('ANALYSIS', cx, cy + 10);
-    ctx.textAlign = 'left';
-
-    // Legend
-    const lx = w * 0.72;
-    segments.forEach((seg, i) => {
-      ctx.fillStyle = seg.color;
-      ctx.fillRect(lx, 15 + i * 18, 8, 8);
-      ctx.font = '9px "Share Tech Mono"';
-      ctx.fillText(`${seg.label}: ${seg.value}`, lx + 12, 23 + i * 18);
-    });
-
-    // Animate values slightly
-    segments.forEach(seg => {
-      seg.value = Math.max(3, seg.value + rand(-0.3, 0.3));
-    });
-
-    requestAnimationFrame(draw);
-  }
-  draw();
+  `);
 }
 
-// --- BAR CHART ---
+// --- BAR CHART (WebGL) ---
 function createBarChart(body) {
-  const canvas = document.createElement('canvas');
-  canvas.className = 'graph-canvas';
-  body.appendChild(canvas);
-
-  const data = [
-    { label: 'SSH', value: rand(30,90), color: '#00ff41' },
-    { label: 'HTTP', value: rand(40,95), color: '#00ffff' },
-    { label: 'DNS', value: rand(20,60), color: '#ffbf00' },
-    { label: 'FTP', value: rand(10,40), color: '#ff0040' },
-    { label: 'SMTP', value: rand(15,50), color: '#bf00ff' },
-    { label: 'TOR', value: rand(30,80), color: '#0080ff' },
-    { label: 'VPN', value: rand(40,70), color: '#00ff41' },
-    { label: 'IRC', value: rand(5,30), color: '#ffbf00' },
-  ];
-
-  function draw() {
-    if (!document.body.contains(canvas)) return;
-    const w = canvas.parentElement.clientWidth;
-    const h = canvas.parentElement.clientHeight;
-    canvas.width = w; canvas.height = h;
-    const ctx = canvas.getContext('2d');
-
-    const barW = (w - 40) / data.length;
-    const maxH = h - 30;
-
-    // Grid
-    ctx.strokeStyle = 'rgba(0,68,0,0.3)';
-    for (let y = 0; y < 5; y++) {
-      const yp = 10 + (maxH / 5) * y;
-      ctx.beginPath(); ctx.moveTo(30, yp); ctx.lineTo(w, yp); ctx.stroke();
+  createGLPanel(body, `
+    precision highp float;
+    varying vec2 v;
+    uniform float T;
+    uniform vec2 R;
+    float hash(float n){return fract(sin(n)*43758.5453);}
+    void main(){
+      vec2 uv=v;
+      float px=1.0/R.y;
+      vec3 col=vec3(0.0);
+      // Grid lines
+      for(int i=0;i<5;i++){
+        float gy=0.1+float(i)*0.17;
+        col+=vec3(0.0,0.27,0.0)*0.3*smoothstep(1.0*px,0.0,abs(uv.y-gy));
+      }
+      // 8 bars
+      vec3 colors[8];
+      colors[0]=vec3(0.0,1.0,0.25);colors[1]=vec3(0.0,1.0,1.0);
+      colors[2]=vec3(1.0,0.75,0.0);colors[3]=vec3(1.0,0.0,0.25);
+      colors[4]=vec3(0.75,0.0,1.0);colors[5]=vec3(0.0,0.5,1.0);
+      colors[6]=vec3(0.0,1.0,0.25);colors[7]=vec3(1.0,0.75,0.0);
+      float barW=1.0/8.0;
+      float margin=0.08;
+      for(int i=0;i<8;i++){
+        float fi=float(i);
+        float bx=margin+fi*(1.0-margin*2.0)/8.0;
+        float bw=(1.0-margin*2.0)/8.0*0.7;
+        // Animated height
+        float h=0.3+hash(fi*1.17)*0.5+sin(T*1.5+fi*0.7)*0.1+sin(T*3.7+fi*1.3)*0.05;
+        h=clamp(h,0.05,0.9);
+        // Bar body
+        if(uv.x>bx && uv.x<bx+bw && uv.y<h && uv.y>0.02){
+          float gradT=(uv.y)/h;
+          col+=colors[i]*(0.3+gradT*0.6);
+          // Glow at top
+          col+=colors[i]*0.4*smoothstep(3.0*px,0.0,abs(uv.y-h));
+        }
+        // Top cap glow
+        if(uv.x>bx-0.005 && uv.x<bx+bw+0.005){
+          col+=colors[i]*0.3*smoothstep(4.0*px,0.0,abs(uv.y-h));
+        }
+      }
+      gl_FragColor=vec4(col,1.0);
     }
-
-    data.forEach((d, i) => {
-      // Animate
-      d.value = Math.max(5, Math.min(100, d.value + rand(-1.5, 1.5)));
-
-      const barH = (d.value / 100) * (maxH - 10);
-      const x = 35 + i * barW;
-      const y = maxH - barH + 10;
-
-      // Bar
-      const gradient = ctx.createLinearGradient(x, y, x, maxH + 10);
-      gradient.addColorStop(0, d.color);
-      gradient.addColorStop(1, d.color.replace(')', ',0.2)').replace('rgb', 'rgba'));
-      ctx.fillStyle = gradient;
-      ctx.fillRect(x + 2, y, barW - 6, barH);
-
-      // Glow
-      ctx.shadowColor = d.color;
-      ctx.shadowBlur = 5;
-      ctx.fillRect(x + 2, y, barW - 6, 2);
-      ctx.shadowBlur = 0;
-
-      // Label
-      ctx.font = '7px "Share Tech Mono"';
-      ctx.fillStyle = 'rgba(0,255,65,0.8)';
-      ctx.textAlign = 'center';
-      ctx.fillText(d.label, x + barW/2, maxH + 20);
-      ctx.fillStyle = d.color;
-      ctx.fillText(d.value.toFixed(0), x + barW/2, y - 4);
-      ctx.textAlign = 'left';
-    });
-
-    requestAnimationFrame(draw);
-  }
-  draw();
+  `);
 }
 
 // --- WORLD MAP (ASCII-ish) ---
