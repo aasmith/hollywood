@@ -305,7 +305,7 @@
     width: 100vw;
     height: 100vh;
     z-index: -1;
-    opacity: 0.12;
+    opacity: 0.55;
   }
 
   /* EQ BARS */
@@ -912,18 +912,19 @@ function initMatrix() {
       vec2 pixelPos = vUv * uResolution;
 
       float col = floor(pixelPos.x / cellSize);
-      float row = floor(pixelPos.y / cellSize);
       float totalCols = floor(uResolution.x / cellSize);
       float totalRows = floor(uResolution.y / cellSize);
+      // Flip row so row 0 is at the TOP (WebGL UV y=0 is bottom)
+      float row = totalRows - floor(pixelPos.y / cellSize);
 
       // Per-column random properties
       float colSeed = col + 0.5;
-      float speed      = 0.4 + hash(colSeed * 1.17) * 1.5;          // fall speed
+      float speed      = 0.3 + hash(colSeed * 1.17) * 1.4;          // fall speed
       float offset     = hash(colSeed * 2.31) * 80.0;               // start offset
-      float brightness = 0.5 + hash(colSeed * 3.47) * 0.5;          // base brightness
+      float brightness = 0.7 + hash(colSeed * 3.47) * 0.3;          // base brightness (boosted)
       float cycleSpeed = 1.0 + hash(colSeed * 4.59) * 3.0;          // character change rate
-      float trailLen   = 12.0 + hash(colSeed * 5.73) * 22.0;        // trail length in cells
-      float depth      = 0.3 + hash(colSeed * 6.11) * 0.7;          // depth layer (dimming)
+      float trailLen   = 15.0 + hash(colSeed * 5.73) * 25.0;        // trail length in cells (longer)
+      float depth      = 0.5 + hash(colSeed * 6.11) * 0.5;          // depth layer (brighter min)
 
       // Which "head" position in this column (wrapping)
       float headPos = mod(uTime * speed + offset, totalRows + trailLen + 8.0);
@@ -935,15 +936,15 @@ function initMatrix() {
       float trail = 0.0;
       if (distFromHead >= 0.0 && distFromHead < trailLen) {
         trail = 1.0 - (distFromHead / trailLen);
-        // Sharper falloff curve for more Matrix-like look
-        trail = trail * trail;
+        // Softer curve: pow 1.5 instead of squaring — keeps tail visible longer
+        trail = pow(trail, 1.5);
       }
 
-      // Head glow: extra bright white-ish at the very tip
+      // Head glow: extra bright white-ish at the leading tip
       float headGlow = 0.0;
-      if (distFromHead >= 0.0 && distFromHead < 1.5) {
-        headGlow = 1.0 - distFromHead / 1.5;
-        headGlow = headGlow * headGlow * headGlow;
+      if (distFromHead >= 0.0 && distFromHead < 2.5) {
+        headGlow = 1.0 - distFromHead / 2.5;
+        headGlow = headGlow * headGlow;
       }
 
       // Character selection: changes over time for each cell
@@ -976,24 +977,30 @@ function initMatrix() {
       // Combine: trail brightness × glyph shape × depth
       float alpha = trail * glyphAlpha * brightness * depth;
 
-      // Color: green base, whiter at the head
-      vec3 green = vec3(0.0, 1.0, 0.25);
+      // Color: rich deep green base, whiter/brighter at the head
+      vec3 green = vec3(0.05, 0.85, 0.15);
+      vec3 brightGreen = vec3(0.2, 1.0, 0.3);
       vec3 white = vec3(0.75, 1.0, 0.85);
-      vec3 color = mix(green, white, headGlow * 0.8);
+      // Mid-trail gets a brighter green, head gets white
+      vec3 color = mix(green, brightGreen, trail * 0.5);
+      color = mix(color, white, headGlow * 0.9);
 
       // Add extra luminance at the head
-      alpha += headGlow * glyphAlpha * 0.7;
+      alpha += headGlow * glyphAlpha * 1.0;
 
       // Occasional "bright flash" columns (randomly)
       float flashPhase = sin(uTime * 0.3 + col * 0.7);
-      if (flashPhase > 0.97) {
-        alpha *= 1.5;
-        color = mix(color, white, 0.3);
+      if (flashPhase > 0.95) {
+        alpha *= 1.8;
+        color = mix(color, white, 0.4);
       }
 
       // Subtle scanline darkening on even rows
       float scanline = 0.92 + 0.08 * mod(row, 2.0);
       alpha *= scanline;
+
+      // Final boost — pump it up
+      alpha *= 1.4;
 
       gl_FragColor = vec4(color * alpha, alpha);
     }
