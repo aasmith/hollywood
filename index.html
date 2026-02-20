@@ -642,6 +642,7 @@
           <div class="dropdown-item" onclick="openPacketSniffer()">Packet Sniffer</div>
           <div class="dropdown-item" onclick="openHashCracker()">Hash Cracker</div>
           <div class="dropdown-item" onclick="openDecompiler()">Decompiler</div>
+          <div class="dropdown-item" onclick="openSignalTuner()">Signal Tuner</div>
           <div class="dropdown-item" onclick="spawnFloatingTerminal()">New Terminal</div>
         </div>
       </div>
@@ -4196,6 +4197,137 @@ function openDropFirewall() {
   }, { speed: 100 });
 }
 
+function openSignalTuner() {
+  const w = 440, h = 380;
+  const p = createPanel({
+    title: '◆ SIGINT BURST CONFIGURATOR // rf0',
+    x: randInt(40, Math.max(60, window.innerWidth - w - 60)),
+    y: randInt(40, Math.max(60, window.innerHeight - h - 100)),
+    w, h,
+  });
+  p.el.classList.add('focused');
+  p.el.style.zIndex = ++panelZIndex;
+
+  const sliderCSS = '-webkit-appearance:none;width:100%;height:3px;border-radius:2px;outline:none;cursor:pointer;background:linear-gradient(90deg,#001a00,#00ff41);margin:4px 0 0 0;';
+
+  const params = [
+    { id:'bf-pktfrag', label:'PKT FRAGMENT WINDOW', unit:'ms', obj:'burstNoteDur',
+      min:0.005, max:0.3, valMin:'min', valMax:'max', toDisplay:v=>(v*1000).toFixed(1), fromSlider:(v)=>v },
+    { id:'bf-cipherblk', label:'CIPHER BLOCK DEPTH', unit:'', obj:'burstNoteCount',
+      min:1, max:12, valMin:'min', valMax:'max', toDisplay:v=>Math.round(v), fromSlider:(v)=>Math.round(v), isInt:true },
+    { id:'bf-acklatency', label:'ACK LATENCY OFFSET', unit:'ms', obj:'burstNoteGap',
+      min:0.002, max:0.15, valMin:'min', valMax:'max', toDisplay:v=>(v*1000).toFixed(1), fromSlider:(v)=>v },
+    { id:'bf-syncinterval', label:'SYNC INTERVAL', unit:'ms', obj:'burstInterval',
+      min:200, max:15000, valMin:'min', valMax:'max', toDisplay:v=>Math.round(v), fromSlider:(v)=>v },
+  ];
+
+  let html = `<div style="padding:8px 12px;font-family:'Share Tech Mono',monospace;color:var(--green);font-size:9px;line-height:1.5;overflow-y:auto;height:100%;">`;
+  html += `<div style="color:#ff0040;font-size:10px;letter-spacing:2px;margin-bottom:4px;">◆ RF SIGNAL INTELLIGENCE TOOLKIT v4.2.1</div>`;
+  html += `<div style="color:#666;margin-bottom:6px;">Module: BURST_PATTERN_CONFIGURATOR // Classification: TS//SCI</div>`;
+  html += `<div style="border:1px solid #003300;padding:6px 8px;margin-bottom:8px;background:rgba(0,20,0,0.4);">`;
+  html += `<span style="color:#00ffff;">STATUS:</span> <span style="color:#00ff41;">ACTIVE</span> — Intercepting burst transmissions on RF0<br>`;
+  html += `<span style="color:#00ffff;">TARGET:</span> <span style="color:#ffbf00;">UNKNOWN EMITTER</span> // Band: 600Hz ± 6 semitones</div>`;
+
+  params.forEach((pm, idx) => {
+    const objRef = pm.obj;
+    const curMin = window[objRef].min;
+    const curMax = window[objRef].max;
+    // Two sliders per param: min and max of the randomization range
+    html += `<div style="border-bottom:1px solid #001a00;padding:6px 0;${idx===0?'':''}">`;
+    html += `<div style="color:#00ffff;letter-spacing:1px;font-size:10px;margin-bottom:2px;">${pm.label}</div>`;
+    // Min slider
+    html += `<div style="display:flex;align-items:center;gap:6px;">`;
+    html += `<span style="color:#666;min-width:32px;font-size:8px;">FLOOR</span>`;
+    html += `<input type="range" id="${pm.id}-min" min="${pm.min}" max="${pm.max}" value="${curMin}" step="${pm.isInt ? 1 : (pm.max-pm.min)/200}" style="${sliderCSS}">`;
+    html += `<span id="${pm.id}-min-val" style="color:#00ff41;min-width:44px;text-align:right;font-size:9px;">${pm.toDisplay(curMin)}${pm.unit}</span>`;
+    html += `</div>`;
+    // Max slider
+    html += `<div style="display:flex;align-items:center;gap:6px;margin-top:2px;">`;
+    html += `<span style="color:#666;min-width:32px;font-size:8px;">CEIL</span>`;
+    html += `<input type="range" id="${pm.id}-max" min="${pm.min}" max="${pm.max}" value="${curMax}" step="${pm.isInt ? 1 : (pm.max-pm.min)/200}" style="${sliderCSS}">`;
+    html += `<span id="${pm.id}-max-val" style="color:#00ff41;min-width:44px;text-align:right;font-size:9px;">${pm.toDisplay(curMax)}${pm.unit}</span>`;
+    html += `</div>`;
+    html += `</div>`;
+  });
+
+  // Visual readout section
+  html += `<div style="margin-top:8px;border:1px solid #003300;padding:6px 8px;background:rgba(0,20,0,0.3);">`;
+  html += `<div style="color:#ffbf00;font-size:8px;letter-spacing:1px;margin-bottom:4px;">BURST WAVEFORM ANALYSIS</div>`;
+  html += `<canvas id="bf-waveform" width="390" height="40" style="width:100%;height:40px;border:1px solid #002200;background:#000800;"></canvas>`;
+  html += `</div>`;
+
+  html += `<div style="margin-top:6px;color:#333;font-size:7px;text-align:center;">AUTHORIZED PERSONNEL ONLY — SIGINT DIVISION — REF: NSA/CSS-PM-2024-0451</div>`;
+  html += `</div>`;
+
+  p.body.innerHTML = html;
+
+  // Wire up sliders
+  params.forEach(pm => {
+    const objRef = pm.obj;
+    const minSlider = p.body.querySelector(`#${pm.id}-min`);
+    const maxSlider = p.body.querySelector(`#${pm.id}-max`);
+    const minVal = p.body.querySelector(`#${pm.id}-min-val`);
+    const maxVal = p.body.querySelector(`#${pm.id}-max-val`);
+
+    const update = () => {
+      let lo = pm.fromSlider(parseFloat(minSlider.value));
+      let hi = pm.fromSlider(parseFloat(maxSlider.value));
+      if (lo > hi) { const tmp = lo; lo = hi; hi = tmp; }
+      window[objRef].min = lo;
+      window[objRef].max = hi;
+      minVal.textContent = pm.toDisplay(lo) + pm.unit;
+      maxVal.textContent = pm.toDisplay(hi) + pm.unit;
+    };
+
+    minSlider.addEventListener('input', update);
+    maxSlider.addEventListener('input', update);
+    // Prevent panel drag when using sliders
+    [minSlider, maxSlider].forEach(s => {
+      s.addEventListener('mousedown', e => e.stopPropagation());
+      s.addEventListener('touchstart', e => e.stopPropagation());
+    });
+  });
+
+  // Waveform visualizer
+  const wfCanvas = p.body.querySelector('#bf-waveform');
+  if (wfCanvas) {
+    const wfCtx = wfCanvas.getContext('2d');
+    let wfFrame = 0;
+    const drawWaveform = () => {
+      if (!document.body.contains(p.el)) return;
+      wfCtx.fillStyle = 'rgba(0,8,0,0.3)';
+      wfCtx.fillRect(0, 0, 390, 40);
+      wfCtx.strokeStyle = '#00ff41';
+      wfCtx.lineWidth = 1;
+      wfCtx.beginPath();
+      for (let x = 0; x < 390; x++) {
+        const noteW = burstNoteDur.min * 400;
+        const gapW = burstNoteGap.min * 400;
+        const period = noteW + gapW;
+        const inNote = (x % Math.max(1, period)) < noteW;
+        const freq = 0.1 + (burstNoteCount.max - burstNoteCount.min) * 0.05;
+        const y = inNote
+          ? 20 + Math.sin((x + wfFrame) * freq) * 14 * (0.5 + Math.sin(x * 0.02 + wfFrame * 0.1) * 0.5)
+          : 20 + (Math.random() - 0.5) * 3;
+        x === 0 ? wfCtx.moveTo(x, y) : wfCtx.lineTo(x, y);
+      }
+      wfCtx.stroke();
+      // Scan line
+      const scanX = (wfFrame * 2) % 390;
+      wfCtx.strokeStyle = 'rgba(0,255,65,0.3)';
+      wfCtx.beginPath();
+      wfCtx.moveTo(scanX, 0);
+      wfCtx.lineTo(scanX, 40);
+      wfCtx.stroke();
+      wfFrame++;
+      requestAnimationFrame(drawWaveform);
+    };
+    drawWaveform();
+  }
+
+  notify('SIGINT BURST CONFIGURATOR');
+}
+
 function hackTheGibson() {
   notify('HACK THE PLANET!', 'warn');
   triggerGlitch();
@@ -4258,6 +4390,11 @@ function resetLayout() {
 
 // --- AUDIO CONTEXT (initialized by access overlay) ---
 let audioCtx;
+// Audio burst parameters (exposed for slider control — var for window[] access)
+var burstNoteDur = { min: 0.03, max: 0.11 };   // note duration range (seconds)
+var burstNoteCount = { min: 3, max: 6 };         // notes per burst
+var burstNoteGap = { min: 0.01, max: 0.05 };     // gap between notes (seconds)
+var burstInterval = { min: 1500, max: 8000 };     // pause between bursts (ms)
 function initAudio() {
   if (audioCtx) return;
   try {
@@ -4312,8 +4449,8 @@ function initAudio() {
       if (!audioCtx || audioCtx.state === 'closed') return;
       const now = audioCtx.currentTime;
 
-      // Random burst: 3-6 quick notes
-      const noteCount = Math.floor(Math.random() * 4) + 3;
+      // Random burst: variable quick notes
+      const noteCount = Math.floor(Math.random() * (burstNoteCount.max - burstNoteCount.min + 1)) + burstNoteCount.min;
       let t = now;
 
       // Build the semitone sequence:
@@ -4359,8 +4496,8 @@ function initAudio() {
 
       for (let i = 0; i < noteCount; i++) {
         const freq = baseNote * Math.pow(2, semitones[i] / 12);
-        const dur = 0.03 + Math.random() * 0.08;
-        const gap = 0.01 + Math.random() * 0.04;
+        const dur = burstNoteDur.min + Math.random() * (burstNoteDur.max - burstNoteDur.min);
+        const gap = burstNoteGap.min + Math.random() * (burstNoteGap.max - burstNoteGap.min);
 
         const osc = audioCtx.createOscillator();
         const noteGain = audioCtx.createGain();
@@ -4384,8 +4521,8 @@ function initAudio() {
       burstGain.gain.setValueAtTime(0.018, t);
       burstGain.gain.linearRampToValueAtTime(0, t + 0.05);
 
-      // Next burst: 1.5s - 8s
-      const nextDelay = 1500 + Math.random() * 6500;
+      // Next burst: variable delay
+      const nextDelay = burstInterval.min + Math.random() * (burstInterval.max - burstInterval.min);
       setTimeout(scheduleRadioBurst, nextDelay);
     }
 
