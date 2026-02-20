@@ -1182,6 +1182,8 @@ async function bootSequence() {
   bootScreen.style.display = 'none';
   $('#main-container').style.display = 'flex';
   initAll();
+  // Audio starts now — we're in the console
+  initAudio();
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -4254,23 +4256,144 @@ function resetLayout() {
   notify('Layout reset');
 }
 
-// --- AUDIO CONTEXT (click to activate) ---
+// --- AUDIO CONTEXT (initialized by access overlay) ---
 let audioCtx;
-document.addEventListener('click', () => {
+function initAudio() {
   if (audioCtx) return;
   try {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    // Create subtle background hum
-    const oscillator = audioCtx.createOscillator();
-    const gainNode = audioCtx.createGain();
-    oscillator.type = 'sawtooth';
-    oscillator.frequency.value = 55;
-    gainNode.gain.value = 0.015;
-    oscillator.connect(gainNode);
-    gainNode.connect(audioCtx.destination);
-    oscillator.start();
+
+    // --- Low quiet background hum (mains hum feel) ---
+    const hum = audioCtx.createOscillator();
+    const humGain = audioCtx.createGain();
+    hum.type = 'sine';
+    hum.frequency.value = 40;      // sub-bass hum
+    humGain.gain.value = 0.008;
+    hum.connect(humGain);
+
+    // Add a second harmonic for warmth
+    const hum2 = audioCtx.createOscillator();
+    const hum2Gain = audioCtx.createGain();
+    hum2.type = 'sine';
+    hum2.frequency.value = 80;     // first harmonic
+    hum2Gain.gain.value = 0.004;
+    hum2.connect(hum2Gain);
+
+    // Filtered noise floor (hiss)
+    const noiseLen = audioCtx.sampleRate * 2;
+    const noiseBuf = audioCtx.createBuffer(1, noiseLen, audioCtx.sampleRate);
+    const noiseData = noiseBuf.getChannelData(0);
+    for (let i = 0; i < noiseLen; i++) noiseData[i] = Math.random() * 2 - 1;
+    const noise = audioCtx.createBufferSource();
+    noise.buffer = noiseBuf;
+    noise.loop = true;
+    const noiseFilter = audioCtx.createBiquadFilter();
+    noiseFilter.type = 'bandpass';
+    noiseFilter.frequency.value = 800;
+    noiseFilter.Q.value = 0.5;
+    const noiseGain = audioCtx.createGain();
+    noiseGain.gain.value = 0.003;
+    noise.connect(noiseFilter);
+    noiseFilter.connect(noiseGain);
+
+    humGain.connect(audioCtx.destination);
+    hum2Gain.connect(audioCtx.destination);
+    noiseGain.connect(audioCtx.destination);
+    hum.start();
+    hum2.start();
+    noise.start();
+
+    // --- Digital radio intercom bursts ---
+    // Random chirps/bleeps within a 6 semitone range, at random intervals
+    const baseNote = 600; // base frequency for bursts (Hz)
+    // 6 semitones = range from baseNote to baseNote * 2^(6/12) ≈ baseNote * 1.414
+
+    function scheduleRadioBurst() {
+      if (!audioCtx || audioCtx.state === 'closed') return;
+      const now = audioCtx.currentTime;
+
+      // Random burst: 3-6 quick notes
+      const noteCount = Math.floor(Math.random() * 4) + 3;
+      let t = now;
+
+      // Build the semitone sequence:
+      // - no repeated notes
+      // - non-monotonic (must change direction at least once)
+      const semitones = [];
+      let prev = Math.floor(Math.random() * 7) - 3; // -3 to +3
+      semitones.push(prev);
+
+      // Pick second note: different from first
+      let second;
+      do { second = Math.floor(Math.random() * 7) - 3; } while (second === prev);
+      semitones.push(second);
+      let lastDir = second > prev ? 1 : -1; // current direction
+      let flipped = false;
+
+      for (let i = 2; i < noteCount; i++) {
+        let next;
+        // Force at least one direction change by the 3rd note if not yet flipped
+        if (!flipped && i === 2) {
+          // Must go opposite direction
+          do {
+            next = Math.floor(Math.random() * 7) - 3;
+          } while (next === semitones[i - 1] || (lastDir > 0 ? next >= semitones[i - 1] : next <= semitones[i - 1]));
+          flipped = true;
+        } else {
+          // Free choice but no repeats
+          do {
+            next = Math.floor(Math.random() * 7) - 3;
+          } while (next === semitones[i - 1]);
+        }
+        if ((next > semitones[i - 1]) !== (lastDir > 0)) flipped = true;
+        lastDir = next > semitones[i - 1] ? 1 : -1;
+        semitones.push(next);
+      }
+
+      // Burst envelope
+      const burstGain = audioCtx.createGain();
+      burstGain.gain.value = 0;
+      burstGain.connect(audioCtx.destination);
+      burstGain.gain.setValueAtTime(0, t);
+      burstGain.gain.linearRampToValueAtTime(0.018, t + 0.01);
+
+      for (let i = 0; i < noteCount; i++) {
+        const freq = baseNote * Math.pow(2, semitones[i] / 12);
+        const dur = 0.03 + Math.random() * 0.08;
+        const gap = 0.01 + Math.random() * 0.04;
+
+        const osc = audioCtx.createOscillator();
+        const noteGain = audioCtx.createGain();
+        osc.type = Math.random() > 0.5 ? 'square' : 'sawtooth';
+        osc.frequency.setValueAtTime(freq, t);
+
+        noteGain.gain.setValueAtTime(0, t);
+        noteGain.gain.linearRampToValueAtTime(0.6, t + 0.005);
+        noteGain.gain.setValueAtTime(0.6, t + dur - 0.005);
+        noteGain.gain.linearRampToValueAtTime(0, t + dur);
+
+        osc.connect(noteGain);
+        noteGain.connect(burstGain);
+        osc.start(t);
+        osc.stop(t + dur + 0.01);
+
+        t += dur + gap;
+      }
+
+      // Fade out
+      burstGain.gain.setValueAtTime(0.018, t);
+      burstGain.gain.linearRampToValueAtTime(0, t + 0.05);
+
+      // Next burst: 1.5s - 8s
+      const nextDelay = 1500 + Math.random() * 6500;
+      setTimeout(scheduleRadioBurst, nextDelay);
+    }
+
+    // Start bursts after a short delay
+    setTimeout(scheduleRadioBurst, 2000);
+
   } catch(e) {}
-}, { once: true });
+}
 
 // --- SOUND EFFECTS ---
 function beep(freq = 800, duration = 50) {
@@ -4298,10 +4421,104 @@ notify = function(msg, type) {
   beep(type === 'error' ? 200 : type === 'warn' ? 400 : 800);
 };
 
+// --- ACCESS OVERLAY ---
+function showAccessOverlay() {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.id = 'access-overlay';
+    overlay.style.cssText = `
+      position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:999999;
+      background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;
+      font-family:'Share Tech Mono',monospace;cursor:crosshair;
+      overflow:hidden;
+    `;
+
+    overlay.innerHTML = `
+      <div style="position:absolute;top:0;left:0;width:100%;height:100%;
+        background:repeating-linear-gradient(0deg,rgba(0,255,65,0.03) 0px,rgba(0,255,65,0.03) 1px,transparent 1px,transparent 3px);
+        pointer-events:none;"></div>
+      <div style="position:absolute;top:0;left:0;width:100%;height:100%;
+        background:radial-gradient(ellipse at center,transparent 50%,rgba(0,0,0,0.6) 100%);
+        pointer-events:none;"></div>
+      <div style="color:#003300;font-size:10px;letter-spacing:4px;margin-bottom:30px;
+        font-family:'Share Tech Mono',monospace;">N3XUS CORP // SECURE TERMINAL v3.31337</div>
+      <div style="color:#00ff41;font-size:14px;letter-spacing:6px;margin-bottom:8px;
+        text-shadow:0 0 10px rgba(0,255,65,0.5),0 0 30px rgba(0,255,65,0.2);
+        font-family:'Orbitron',sans-serif;font-weight:700;">◆ ACCESS REQUIRED ◆</div>
+      <div style="color:#004400;font-size:9px;letter-spacing:3px;margin-bottom:40px;">
+        AUTHORIZATION LEVEL: <span style="color:#ff0040;">CLASSIFIED</span></div>
+      <div id="access-prompt" style="color:#00ff41;font-size:11px;letter-spacing:3px;
+        animation:blink 1.2s step-end infinite;
+        text-shadow:0 0 8px rgba(0,255,65,0.4);">[ PRESS ANY KEY OR CLICK TO AUTHENTICATE ]</div>
+      <div style="color:#002200;font-size:8px;margin-top:50px;letter-spacing:2px;">
+        UNAUTHORIZED ACCESS WILL BE PROSECUTED UNDER FEDERAL LAW 18 U.S.C. § 1030</div>
+      <style>
+        @keyframes blink { 50% { opacity: 0.3; } }
+        #access-overlay .glyph-rain {
+          position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;overflow:hidden;
+        }
+      </style>
+    `;
+
+    // Sparse falling glyphs
+    const rain = document.createElement('div');
+    rain.className = 'glyph-rain';
+    overlay.appendChild(rain);
+
+    const glyphs = 'アイウエオカキクケコサシスセソ0123456789ABCDEF';
+    for (let i = 0; i < 30; i++) {
+      const col = document.createElement('div');
+      col.style.cssText = `
+        position:absolute;top:${-Math.random()*100}%;left:${Math.random()*100}%;
+        color:rgba(0,255,65,0.08);font-size:12px;line-height:16px;
+        font-family:'Share Tech Mono',monospace;white-space:pre;
+        animation:fall ${8+Math.random()*12}s linear infinite;
+        animation-delay:${-Math.random()*10}s;
+      `;
+      let text = '';
+      for (let j = 0; j < 30; j++) text += glyphs[Math.floor(Math.random()*glyphs.length)] + '\n';
+      col.textContent = text;
+      rain.appendChild(col);
+    }
+
+    const fallStyle = document.createElement('style');
+    fallStyle.textContent = '@keyframes fall { from { transform:translateY(-100%); } to { transform:translateY(100vh); } }';
+    overlay.appendChild(fallStyle);
+
+    document.body.appendChild(overlay);
+
+    function engage() {
+      overlay.removeEventListener('click', engage);
+      document.removeEventListener('keydown', engage);
+
+      // Dramatic dismiss
+      const prompt = overlay.querySelector('#access-prompt');
+      prompt.style.animation = 'none';
+      prompt.textContent = '[ ACCESS GRANTED ]';
+      prompt.style.color = '#00ff41';
+      prompt.style.textShadow = '0 0 20px #00ff41, 0 0 40px #00ff41';
+
+      setTimeout(() => {
+        overlay.style.transition = 'opacity 0.6s ease';
+        overlay.style.opacity = '0';
+        setTimeout(() => {
+          overlay.remove();
+          resolve();
+        }, 600);
+      }, 500);
+    }
+
+    overlay.addEventListener('click', engage);
+    document.addEventListener('keydown', engage);
+  });
+}
+
 // --- START ---
+// Matrix intro plays first (no interaction needed), then access overlay, then boot
 initMatrix();
 (async () => {
   await matrixIntro();
+  await showAccessOverlay();
   bootSequence();
 })();
 </script>
