@@ -4328,6 +4328,81 @@ function openSignalTuner() {
   notify('SIGINT BURST CONFIGURATOR');
 }
 
+function playVictoryMelody() {
+  if (!audioCtx) return;
+  const now = audioCtx.currentTime;
+
+  // Bloopy triumph melody — ascending arpeggiated phrase with a flourish
+  // Notes as semitones from C5 (523.25 Hz)
+  const c5 = 523.25;
+  const melody = [
+    // phrase 1: ascending major arpeggio
+    { st: 0,  dur: 0.10, delay: 0.00 },  // C
+    { st: 4,  dur: 0.10, delay: 0.12 },  // E
+    { st: 7,  dur: 0.10, delay: 0.24 },  // G
+    { st: 12, dur: 0.15, delay: 0.36 },  // C (octave)
+    // phrase 2: quick descending run
+    { st: 11, dur: 0.06, delay: 0.56 },  // B
+    { st: 9,  dur: 0.06, delay: 0.63 },  // A
+    { st: 7,  dur: 0.06, delay: 0.70 },  // G
+    // phrase 3: triumphant finish — leap up
+    { st: 12, dur: 0.10, delay: 0.82 },  // C
+    { st: 16, dur: 0.10, delay: 0.94 },  // E (high)
+    { st: 19, dur: 0.25, delay: 1.06 },  // G (high) — held
+    // final sparkle
+    { st: 24, dur: 0.08, delay: 1.36 },  // C (2 octaves up)
+    { st: 19, dur: 0.08, delay: 1.46 },  // G
+    { st: 24, dur: 0.35, delay: 1.56 },  // C (2 octaves up) — ring out
+  ];
+
+  // Master gain for the melody
+  const masterGain = audioCtx.createGain();
+  masterGain.gain.setValueAtTime(0.04, now);
+  masterGain.connect(audioCtx.destination);
+
+  melody.forEach(note => {
+    const t = now + note.delay;
+    const freq = c5 * Math.pow(2, note.st / 12);
+
+    // Main oscillator — square for that bloopy bite
+    const osc = audioCtx.createOscillator();
+    const noteGain = audioCtx.createGain();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(freq, t);
+
+    // Punchy attack, sustain, then taper
+    noteGain.gain.setValueAtTime(0, t);
+    noteGain.gain.linearRampToValueAtTime(0.7, t + 0.008);
+    noteGain.gain.setValueAtTime(0.6, t + note.dur * 0.6);
+    noteGain.gain.exponentialRampToValueAtTime(0.001, t + note.dur + 0.05);
+
+    osc.connect(noteGain);
+    noteGain.connect(masterGain);
+    osc.start(t);
+    osc.stop(t + note.dur + 0.06);
+
+    // Octave sparkle layer — sawtooth, quieter
+    const osc2 = audioCtx.createOscillator();
+    const noteGain2 = audioCtx.createGain();
+    osc2.type = 'sawtooth';
+    osc2.frequency.setValueAtTime(freq * 2, t);
+
+    noteGain2.gain.setValueAtTime(0, t);
+    noteGain2.gain.linearRampToValueAtTime(0.15, t + 0.008);
+    noteGain2.gain.exponentialRampToValueAtTime(0.001, t + note.dur * 0.7);
+
+    osc2.connect(noteGain2);
+    noteGain2.connect(masterGain);
+    osc2.start(t);
+    osc2.stop(t + note.dur + 0.06);
+  });
+
+  // Fade master out at the end
+  const endTime = now + 2.0;
+  masterGain.gain.setValueAtTime(0.04, endTime);
+  masterGain.gain.exponentialRampToValueAtTime(0.001, endTime + 0.5);
+}
+
 function hackTheGibson() {
   notify('HACK THE PLANET!', 'warn');
   triggerGlitch();
@@ -4346,6 +4421,8 @@ function hackTheGibson() {
     `;
     overlay.textContent = 'ACCESS GRANTED';
     document.body.appendChild(overlay);
+    // Victory melody!
+    playVictoryMelody();
     setTimeout(() => {
       overlay.style.transition = 'opacity 1s';
       overlay.style.opacity = '0';
