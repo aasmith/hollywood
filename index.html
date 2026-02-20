@@ -623,25 +623,25 @@
     <div class="top-menu">
       <div class="top-menu-item">FILE
         <div class="dropdown-menu">
-          <div class="dropdown-item" onclick="notify('Importing neural dataset...')">Import Dataset</div>
-          <div class="dropdown-item" onclick="notify('Exporting encrypted payload...')">Export Payload</div>
-          <div class="dropdown-item" onclick="notify('Quantum tunnel established')">New Tunnel</div>
-          <div class="dropdown-item" onclick="notify('Session archived to /dev/null')">Archive Session</div>
+          <div class="dropdown-item" onclick="openImportDataset()">Import Dataset</div>
+          <div class="dropdown-item" onclick="openExportPayload()">Export Payload</div>
+          <div class="dropdown-item" onclick="openNewTunnel()">New Tunnel</div>
+          <div class="dropdown-item" onclick="openArchiveSession()">Archive Session</div>
         </div>
       </div>
       <div class="top-menu-item">SCAN
         <div class="dropdown-menu">
           <div class="dropdown-item" onclick="runNetScan()">Network Sweep</div>
-          <div class="dropdown-item" onclick="notify('Vulnerability scan initiated...')">Vuln Scanner</div>
-          <div class="dropdown-item" onclick="notify('Port enumeration: 65535 ports...')">Port Enum</div>
-          <div class="dropdown-item" onclick="notify('DNS recon in progress...')">DNS Recon</div>
+          <div class="dropdown-item" onclick="openVulnScanner()">Vuln Scanner</div>
+          <div class="dropdown-item" onclick="openPortEnum()">Port Enum</div>
+          <div class="dropdown-item" onclick="openDNSRecon()">DNS Recon</div>
         </div>
       </div>
       <div class="top-menu-item">TOOLS
         <div class="dropdown-menu">
-          <div class="dropdown-item" onclick="notify('Packet sniffer active on eth0')">Packet Sniffer</div>
-          <div class="dropdown-item" onclick="notify('Crypto miner deployed (jk)')">Hash Cracker</div>
-          <div class="dropdown-item" onclick="notify('Decompiler loaded')">Decompiler</div>
+          <div class="dropdown-item" onclick="openPacketSniffer()">Packet Sniffer</div>
+          <div class="dropdown-item" onclick="openHashCracker()">Hash Cracker</div>
+          <div class="dropdown-item" onclick="openDecompiler()">Decompiler</div>
           <div class="dropdown-item" onclick="spawnFloatingTerminal()">New Terminal</div>
         </div>
       </div>
@@ -649,15 +649,15 @@
         <div class="dropdown-menu">
           <div class="dropdown-item" onclick="toggleNightVision()">Night Vision</div>
           <div class="dropdown-item" onclick="triggerGlitch()">Glitch Mode</div>
-          <div class="dropdown-item" onclick="notify('Wireframe overlay active')">Wireframe</div>
+          <div class="dropdown-item" onclick="openWireframe()">Wireframe</div>
           <div class="dropdown-item" onclick="resetLayout()">Reset Layout</div>
         </div>
       </div>
       <div class="top-menu-item">HACK
         <div class="dropdown-menu">
-          <div class="dropdown-item" onclick="notify('ACCESS GRANTED', 'warn')">Bypass Auth</div>
-          <div class="dropdown-item" onclick="notify('Injecting shellcode...', 'error')">Inject Payload</div>
-          <div class="dropdown-item" onclick="notify('Firewall rules: iptables -F')">Drop Firewall</div>
+          <div class="dropdown-item" onclick="openBypassAuth()">Bypass Auth</div>
+          <div class="dropdown-item" onclick="openInjectPayload()">Inject Payload</div>
+          <div class="dropdown-item" onclick="openDropFirewall()">Drop Firewall</div>
           <div class="dropdown-item" onclick="hackTheGibson()">Hack The Gibson</div>
         </div>
       </div>
@@ -3919,6 +3919,279 @@ function triggerGlitch() {
 function toggleNightVision() {
   document.body.style.filter = document.body.style.filter === 'hue-rotate(60deg) brightness(1.2)' ? '' : 'hue-rotate(60deg) brightness(1.2)';
   notify('Night vision ' + (document.body.style.filter ? 'ENABLED' : 'DISABLED'));
+}
+
+// --- MENU PANEL SPAWNERS ---
+// Generic: spawn a hacker panel with streaming nonsense content
+function spawnHackPanel(title, contentGen, opts = {}) {
+  const w = opts.w || randInt(380, 520);
+  const h = opts.h || randInt(240, 340);
+  const p = createPanel({
+    title: `◆ ${title}`,
+    x: randInt(40, Math.max(60, window.innerWidth - w - 60)),
+    y: randInt(40, Math.max(60, window.innerHeight - h - 100)),
+    w, h,
+  });
+  p.el.classList.add('focused');
+  p.el.style.zIndex = ++panelZIndex;
+
+  const content = document.createElement('div');
+  content.style.cssText = 'font-size:9px;line-height:1.6;color:var(--green);overflow-y:auto;height:100%;white-space:pre;font-family:"Share Tech Mono",monospace;';
+  p.body.appendChild(content);
+
+  let lines = 0;
+  const maxLines = opts.maxLines || 80;
+  const speed = opts.speed || 120;
+  const iv = setInterval(() => {
+    if (!document.body.contains(p.el) || lines >= maxLines) { clearInterval(iv); return; }
+    const line = contentGen(lines);
+    content.innerHTML += line + '\n';
+    content.scrollTop = content.scrollHeight;
+    lines++;
+  }, speed);
+
+  notify(title);
+  return p;
+}
+
+// --- FILE menu ---
+function openImportDataset() {
+  const files = ['synapse_dump.ndb','cortex_map_v7.bin','neural_weights_2049.h5','axon_trace.pcap','memory_sector_0xFF.raw','quantum_state.qbt','genome_seq.fasta','dark_pool_tx.enc'];
+  const statuses = ['<span style="color:#00ffff">LOADED</span>','<span style="color:#00ff41">PARSED</span>','<span style="color:#ffbf00">INDEXING</span>','<span style="color:#ff0040">CHECKSUM ERR</span>','<span style="color:#00ff41">OK</span>'];
+  spawnHackPanel('DATASET IMPORT // NEURAL-NET v4.2', (i) => {
+    if (i === 0) return '<span style="color:#00ffff">NEURAL DATASET IMPORTER v4.2.1</span>';
+    if (i === 1) return 'Source: <span style="color:#ffbf00">/dev/brain/corpus_callosum</span>';
+    if (i === 2) return '────────────────────────────────────';
+    const f = files[randInt(0, files.length)];
+    const sz = (Math.random() * 900 + 10).toFixed(1);
+    const st = statuses[randInt(0, statuses.length)];
+    return `[${timestamp()}] ${f.padEnd(28)} ${(sz + 'MB').padStart(9)} ${st}`;
+  });
+}
+
+function openExportPayload() {
+  spawnHackPanel('PAYLOAD EXPORT // AES-256-GCM', (i) => {
+    if (i === 0) return '<span style="color:#ff0040">▓▓▓ ENCRYPTED PAYLOAD BUILDER ▓▓▓</span>';
+    if (i === 1) return 'Cipher: AES-256-GCM | IV: ' + Array.from({length:12},()=>hex()).join('');
+    if (i === 2) return 'HMAC:   SHA-512 | Salt: ' + Array.from({length:8},()=>hex()).join('');
+    if (i === 3) return '────────────────────────────────────';
+    const block = Array.from({length:8},()=>hexWord()).join(' ');
+    const pct = Math.min(99, (i * 1.3)).toFixed(1);
+    return `BLK ${(i-3).toString().padStart(4,'0')}  ${block}  <span style="color:#00ffff">${pct}%</span>`;
+  }, { speed: 60 });
+}
+
+function openNewTunnel() {
+  const protos = ['SSH','WireGuard','IPSec','OpenVPN','SOCKS5','Tor','I2P','Nebula'];
+  const hops = [];
+  for (let i = 0; i < randInt(4,8); i++) hops.push(ipAddr());
+  spawnHackPanel('QUANTUM TUNNEL // MULTI-HOP', (i) => {
+    if (i === 0) return '<span style="color:#bf00ff">◆ QUANTUM TUNNEL NEGOTIATION ◆</span>';
+    if (i === 1) return 'Protocol: ' + pick(protos) + ' over ' + pick(protos);
+    if (i === 2) return 'Hops: ' + hops.length + ' | Latency budget: ' + randInt(20,200) + 'ms';
+    if (i === 3) return '────────────────────────────────────';
+    if (i < 3 + hops.length) {
+      const h = i - 3;
+      return `HOP ${h+1}  ${hops[h].padEnd(16)} <span style="color:#00ffff">${pick(protos).padEnd(10)}</span> <span style="color:#00ff41">ESTABLISHED</span>  ${randInt(5,80)}ms`;
+    }
+    const ev = pick(['keepalive','rekey','data','heartbeat','ratchet','entropy-refill']);
+    return `[${timestamp()}] tunnel.${ev}  seq=${randInt(1000,99999)}  bytes=${randInt(64,9000)}  <span style="color:#00ff41">OK</span>`;
+  });
+}
+
+function openArchiveSession() {
+  spawnHackPanel('SESSION ARCHIVE // /dev/null', (i) => {
+    if (i === 0) return '<span style="color:#ffbf00">SESSION ARCHIVAL SERVICE v2.0</span>';
+    if (i === 1) return 'Destination: <span style="color:#ff0040">/dev/null</span> (maximum security)';
+    if (i === 2) return '────────────────────────────────────';
+    const items = ['keystrokes','mouse_events','screen_caps','packet_log','audio_buf','clipboard','env_vars','proc_tree','mem_pages','gpu_state'];
+    const item = pick(items);
+    const sz = (Math.random() * 50 + 0.1).toFixed(2);
+    return `[${timestamp()}] archiving ${item.padEnd(14)} ${(sz+'MB').padStart(9)} → <span style="color:#ff0040">/dev/null</span> <span style="color:#00ff41">SHREDDED</span>`;
+  });
+}
+
+// --- SCAN menu ---
+function openVulnScanner() {
+  const cves = ['CVE-2024-31337','CVE-2025-0001','CVE-2023-44271','CVE-2024-21762','CVE-2025-13370','CVE-2024-9999','CVE-2023-XXXX'];
+  const sevs = ['<span style="color:#ff0040">CRITICAL</span>','<span style="color:#ff0040">HIGH</span>','<span style="color:#ffbf00">MEDIUM</span>','<span style="color:#00ff41">LOW</span>','<span style="color:#00ffff">INFO</span>'];
+  const services = ['OpenSSH 8.9','nginx 1.21','Apache 2.4.51','MySQL 8.0','Redis 7.0','Docker 24.0','kubelet 1.28','etcd 3.5','Postfix 3.7'];
+  spawnHackPanel('VULN SCANNER // NESSUS++', (i) => {
+    if (i === 0) return '<span style="color:#ff0040">◆ VULNERABILITY SCANNER v6.6.6 ◆</span>';
+    if (i === 1) return 'Target: ' + ipAddr() + '/24 | Plugins: 98,412 loaded';
+    if (i === 2) return '────────────────────────────────────';
+    const svc = pick(services);
+    const sev = sevs[randInt(0, sevs.length)];
+    const cve = cves[randInt(0, cves.length)];
+    const port = pick([22,80,443,3306,5432,6379,8080,8443,9200,27017]);
+    return `[${timestamp()}] :${(port+'').padEnd(5)} ${svc.padEnd(18)} ${cve}  ${sev}`;
+  }, { speed: 200 });
+}
+
+function openPortEnum() {
+  let port = 0;
+  spawnHackPanel('PORT ENUM // 0-65535', (i) => {
+    if (i === 0) return '<span style="color:#00ffff">PORT ENUMERATION ENGINE</span>';
+    if (i === 1) return 'Target: ' + ipAddr() + ' | Mode: SYN stealth scan';
+    if (i === 2) return '────────────────────────────────────';
+    const batch = randInt(80, 400);
+    port += batch;
+    if (port > 65535) port = 65535;
+    const found = Math.random() > 0.7;
+    if (found) {
+      const p = pick([21,22,25,53,80,110,143,443,993,995,3306,3389,5432,5900,6379,8080,8443,9200,27017]);
+      const state = pick(['<span style="color:#00ff41">OPEN</span>','<span style="color:#ffbf00">FILTERED</span>']);
+      const svc = pick(['ftp','ssh','smtp','dns','http','pop3','imap','https','mysql','rdp','postgres','vnc','redis','proxy']);
+      return `PORT ${(p+'').padStart(5)} ${state}  ${svc.padEnd(10)} banner="${hex()}${hex()}${hex()}"`;
+    }
+    return `<span style="color:#666">scanning ${port-batch}..${Math.min(port,65535)} (${Math.min(100,(port/655.35).toFixed(1))}%)</span>`;
+  }, { speed: 80 });
+}
+
+function openDNSRecon() {
+  const types = ['A','AAAA','MX','NS','CNAME','TXT','SOA','PTR','SRV','DNSKEY'];
+  const domains = ['shadow.corp','n3xus.io','darkpool.net','gibson.hack','z3r0.day','flux.mesh','ghost.onion','void.link'];
+  spawnHackPanel('DNS RECON // DEEP ENUM', (i) => {
+    if (i === 0) return '<span style="color:#00ffff">DNS RECONNAISSANCE MODULE</span>';
+    if (i === 1) return 'Resolvers: 8.8.8.8, 1.1.1.1, 9.9.9.9 | DNSSEC: verify';
+    if (i === 2) return '────────────────────────────────────';
+    const dom = pick(domains);
+    const sub = pick(['','www.','api.','mail.','ns1.','vpn.','git.','ci.','dev.','staging.','prod.','db.','cache.','auth.']);
+    const type = pick(types);
+    const ttl = randInt(60, 86400);
+    let val = ipAddr();
+    if (type === 'MX') val = `${randInt(1,50)} mail.${dom}`;
+    if (type === 'TXT') val = `"v=spf1 include:${dom} ~all"`;
+    if (type === 'NS') val = `ns${randInt(1,4)}.${dom}`;
+    if (type === 'CNAME') val = `${pick(['cdn','lb','proxy'])}.${dom}`;
+    return `${(sub+dom).padEnd(28)} ${type.padEnd(6)} TTL:${(ttl+'').padEnd(6)} ${val}`;
+  }, { speed: 150 });
+}
+
+// --- TOOLS menu ---
+function openPacketSniffer() {
+  const protos = ['TCP','UDP','ICMP','DNS','TLS','HTTP','SSH','ARP','MQTT','gRPC'];
+  const flags = ['SYN','ACK','FIN','PSH','RST','SYN-ACK','FIN-ACK','URG'];
+  spawnHackPanel('PACKET SNIFFER // eth0 PROMISC', (i) => {
+    if (i === 0) return '<span style="color:#ff0040">◆ LIVE PACKET CAPTURE — eth0 ◆</span>';
+    if (i === 1) return 'Mode: PROMISCUOUS | Filter: none | Snap: 65535';
+    if (i === 2) return '────────────────────────────────────';
+    const proto = pick(protos);
+    const src = ipAddr() + ':' + randInt(1024,65535);
+    const dst = ipAddr() + ':' + pick([22,80,443,8080,3306,53,5432]);
+    const sz = randInt(40, 1500);
+    const flag = proto === 'TCP' ? ' [' + pick(flags) + ']' : '';
+    return `<span style="color:#666">${(i-2).toString().padStart(5)}</span> ${proto.padEnd(5)} ${src.padEnd(22)} → ${dst.padEnd(22)} ${(sz+'B').padStart(6)}${flag}`;
+  }, { speed: 50, maxLines: 200 });
+}
+
+function openHashCracker() {
+  const algos = ['MD5','SHA-1','SHA-256','SHA-512','bcrypt','scrypt','Argon2','NTLM','WPA2-PBKDF2'];
+  const wordlists = ['rockyou.txt','darkweb2017.lst','hashcat-rules.rl','crackstation-human.txt','probable-v2.txt'];
+  spawnHackPanel('HASH CRACKER // GPU MODE', (i) => {
+    if (i === 0) return '<span style="color:#ffbf00">◆ DISTRIBUTED HASH CRACKER ◆</span>';
+    if (i === 1) return 'Algorithm: ' + pick(algos) + ' | Wordlist: ' + pick(wordlists);
+    if (i === 2) return 'GPUs: 4x RTX 5090 | Hashrate: ' + (Math.random()*800+200).toFixed(1) + ' GH/s';
+    if (i === 3) return '────────────────────────────────────';
+    const hash = Array.from({length:16},()=>hex()).join('');
+    const cracked = Math.random() > 0.6;
+    if (cracked) {
+      const words = ['password123','admin','letmein','hunter2','correcthorsebatterystaple','guest','root','123456','qwerty','dragon'];
+      return `${hash}  <span style="color:#00ff41">CRACKED → "${pick(words)}"</span>`;
+    }
+    return `${hash}  <span style="color:#666">testing... ${(Math.random()*100).toFixed(1)}%</span>`;
+  }, { speed: 100 });
+}
+
+function openDecompiler() {
+  const regs = ['rax','rbx','rcx','rdx','rsi','rdi','rsp','rbp','r8','r9','r10','r11','r12','r13','r14','r15'];
+  const ops = ['mov','push','pop','call','jmp','je','jne','cmp','test','lea','xor','add','sub','imul','shr','shl','ret','nop','int3','syscall'];
+  spawnHackPanel('DECOMPILER // x86_64', (i) => {
+    if (i === 0) return '<span style="color:#bf00ff">◆ BINARY DECOMPILER v3.1 ◆</span>';
+    if (i === 1) return 'Binary: /usr/bin/target | Format: ELF64 | Stripped: yes';
+    if (i === 2) return '────────────────────────────────────';
+    const addr = (0x400000 + i * randInt(1,8)).toString(16);
+    const op = pick(ops);
+    let operands = '';
+    if (op === 'ret' || op === 'nop' || op === 'syscall' || op === 'int3') {
+      operands = '';
+    } else if (op === 'push' || op === 'pop' || op === 'call' || op === 'jmp' || op === 'je' || op === 'jne') {
+      operands = op.startsWith('j') || op === 'call' ? '0x' + (0x400000 + randInt(0,0x10000)).toString(16) : pick(regs);
+    } else {
+      operands = pick(regs) + ', ' + (Math.random()>0.5 ? pick(regs) : '0x'+hex()+hex());
+    }
+    const bytes = Array.from({length:randInt(1,6)},()=>hex()).join(' ');
+    return `<span style="color:#666">0x${addr}</span>  ${bytes.padEnd(18)} <span style="color:#00ffff">${op.padEnd(8)}</span> ${operands}`;
+  }, { speed: 40, maxLines: 200 });
+}
+
+// --- VIEW menu ---
+function openWireframe() {
+  notify('Wireframe overlay active');
+  // Toggle a CSS wireframe effect on all panels
+  const existing = document.getElementById('wireframe-style');
+  if (existing) { existing.remove(); notify('Wireframe DISABLED'); return; }
+  const style = document.createElement('style');
+  style.id = 'wireframe-style';
+  style.textContent = `.panel { background: rgba(0,20,0,0.3) !important; } .panel-body { border: 1px dashed rgba(0,255,65,0.2) !important; }`;
+  document.head.appendChild(style);
+}
+
+// --- HACK menu ---
+function openBypassAuth() {
+  const methods = ['Kerberoast','Golden Ticket','Pass-the-Hash','LDAP Injection','OAuth Redirect','JWT None-alg','SAML Forgery','Cookie Replay'];
+  spawnHackPanel('AUTH BYPASS // PRIV ESCALATION', (i) => {
+    if (i === 0) return '<span style="color:#ff0040">▓▓▓ AUTHENTICATION BYPASS ENGINE ▓▓▓</span>';
+    if (i === 1) return 'Target: ' + ipAddr() + ' | Method: ' + pick(methods);
+    if (i === 2) return '────────────────────────────────────';
+    const actions = [
+      'Enumerating users... ' + randInt(50,500) + ' found',
+      'Extracting ticket: krbtgt/' + pick(['CORP','DOMAIN','ADMIN','DC01']) + ' <span style="color:#ffbf00">OK</span>',
+      'Forging token: <span style="color:#00ffff">' + Array.from({length:8},()=>hex()).join('') + '</span>',
+      'Testing creds: admin/' + pick(['P@ssw0rd','Summer2025!','admin','changeme','Welcome1']) + ' <span style="color:#00ff41">VALID</span>',
+      'Escalating: user → <span style="color:#ff0040">root</span>',
+      'Dumping SAM: ' + Array.from({length:16},()=>hex()).join(''),
+      'Lateral move → ' + ipAddr() + ' <span style="color:#00ff41">SUCCESS</span>',
+      'Installing backdoor on port ' + randInt(40000,65000) + '...',
+      '<span style="color:#ffbf00">ALERT: Honeypot detected at ' + ipAddr() + ' — evading</span>',
+      'Session established: <span style="color:#00ff41">NT AUTHORITY\\SYSTEM</span>',
+    ];
+    return `[${timestamp()}] ${pick(actions)}`;
+  }, { speed: 180 });
+}
+
+function openInjectPayload() {
+  spawnHackPanel('PAYLOAD INJECTION // SHELLCODE', (i) => {
+    if (i === 0) return '<span style="color:#ff0040">◆ SHELLCODE INJECTION ENGINE ◆</span>';
+    if (i === 1) return 'Target PID: ' + randInt(1000,65000) + ' | Arch: x86_64 | ASLR: bypass';
+    if (i === 2) return '────────────────────────────────────';
+    if (i < 6) {
+      const stages = ['Allocating RWX region...','Writing stage-1 loader...','Resolving kernel32.dll...','Patching AMSI...','Injecting shellcode...'];
+      if (i - 3 < stages.length) return `<span style="color:#ffbf00">[STAGE ${i-2}]</span> ${stages[i-3]} <span style="color:#00ff41">OK</span>`;
+    }
+    // Show shellcode hex dump
+    const addr = (0x7ff000000000 + (i-6) * 16);
+    const bytes = Array.from({length:16},()=>hex()).join(' ');
+    return `<span style="color:#666">${addr.toString(16).padStart(12,'0')}</span>  ${bytes}`;
+  }, { speed: 50, maxLines: 150 });
+}
+
+function openDropFirewall() {
+  const chains = ['INPUT','OUTPUT','FORWARD','PREROUTING','POSTROUTING','DOCKER','KUBE-PROXY'];
+  const actions = ['ACCEPT','DROP','REJECT','LOG','MASQUERADE','DNAT','SNAT','REDIRECT'];
+  spawnHackPanel('FIREWALL CTRL // iptables', (i) => {
+    if (i === 0) return '<span style="color:#ff0040">◆ FIREWALL RULE MANIPULATION ◆</span>';
+    if (i === 1) return '# iptables -L -n -v --line-numbers';
+    if (i === 2) return '────────────────────────────────────';
+    const chain = pick(chains);
+    const action = pick(actions);
+    const src = Math.random() > 0.3 ? ipAddr()+'/'+pick([8,16,24,32]) : '0.0.0.0/0';
+    const dst = Math.random() > 0.3 ? ipAddr()+'/'+pick([8,16,24,32]) : '0.0.0.0/0';
+    const proto = pick(['tcp','udp','icmp','all']);
+    const port = proto !== 'icmp' ? ' dpt:'+pick([22,80,443,3306,8080]) : '';
+    const pkts = randInt(0, 999999);
+    return `<span style="color:#ffbf00">${chain.padEnd(14)}</span> ${action.padEnd(12)} ${proto.padEnd(5)} ${src.padEnd(20)} ${dst.padEnd(20)}${port} <span style="color:#666">${pkts} pkts</span>`;
+  }, { speed: 100 });
 }
 
 function hackTheGibson() {
