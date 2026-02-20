@@ -4514,13 +4514,23 @@ function showAccessOverlay() {
 }
 
 // --- START ---
-// Matrix intro plays first (no interaction needed), then access overlay, then boot
-initMatrix();
-(async () => {
-  await matrixIntro();
-  await showAccessOverlay();
-  bootSequence();
-})();
+const skipIntro = new URLSearchParams(window.location.search).has('nointro');
+if (skipIntro) {
+  // Hide the intro canvas, skip straight to access overlay → boot
+  document.getElementById('intro-canvas').style.display = 'none';
+  (async () => {
+    await showAccessOverlay();
+    bootSequence();
+  })();
+} else {
+  // Full experience: matrix intro → access overlay → boot
+  initMatrix();
+  (async () => {
+    await matrixIntro();
+    await showAccessOverlay();
+    bootSequence();
+  })();
+}
 </script>
 </body>
 </html>
