@@ -4404,12 +4404,164 @@ function playVictoryMelody() {
 }
 
 function hackTheGibson() {
-  notify('HACK THE PLANET!', 'warn');
   triggerGlitch();
-  setTimeout(() => notify('ACCESS GRANTED — Welcome to The Gibson', 'warn'), 1500);
-  setTimeout(() => notify('Downloading garbage file...', 'error'), 3000);
-  setTimeout(() => {
-    // Spawn a big dramatic overlay briefly
+
+  // Spawn the epic hax panel
+  const w = 560, h = 400;
+  const p = createPanel({
+    title: '◆ GIBSON MAINFRAME INTRUSION // 0-DAY',
+    x: Math.max(40, (window.innerWidth - w) / 2 | 0),
+    y: Math.max(40, (window.innerHeight - h) / 2 - 60 | 0),
+    w, h,
+  });
+  p.el.classList.add('focused');
+  p.el.style.zIndex = ++panelZIndex;
+
+  const content = document.createElement('div');
+  content.style.cssText = 'font-size:9px;line-height:1.6;color:var(--green);overflow-y:auto;height:100%;white-space:pre;font-family:"Share Tech Mono",monospace;';
+  p.body.appendChild(content);
+
+  const w_ = s => { content.innerHTML += s + '\n'; content.scrollTop = content.scrollHeight; };
+  const delay = (ms) => new Promise(r => setTimeout(r, ms));
+
+  const gibsonIP = '10.13.37.' + randInt(2,254);
+  const gibsonHost = 'gibson.ellingson.com';
+  const exploits = ['CVE-2025-31337','CVE-2024-0DAY9','CVE-2023-PTING','CVE-2025-HACK1'];
+  const services = [
+    { port:22, svc:'SSH', ver:'OpenSSH 9.1p1' },
+    { port:80, svc:'HTTP', ver:'Apache/2.4.58' },
+    { port:443, svc:'HTTPS', ver:'nginx/1.25.4' },
+    { port:3306, svc:'MySQL', ver:'8.0.36' },
+    { port:5432, svc:'PostgreSQL', ver:'16.2' },
+    { port:6379, svc:'Redis', ver:'7.2.4 (UNAUTH)' },
+    { port:8080, svc:'MGMT', ver:'Ellingson Admin Panel v3.1' },
+    { port:9090, svc:'DEBUG', ver:'node-inspect/2.0.0' },
+  ];
+
+  (async () => {
+    // Phase 1: Recon
+    w_('<span style="color:#ff0040;font-size:11px;letter-spacing:2px;">◆ GIBSON MAINFRAME INTRUSION FRAMEWORK v6.6.6 ◆</span>');
+    w_('<span style="color:#666;">═══════════════════════════════════════════════════════</span>');
+    w_('');
+    w_(`<span style="color:#00ffff;">[RECON]</span> Resolving target: ${gibsonHost}`);
+    await delay(300);
+    w_(`<span style="color:#00ffff;">[RECON]</span> DNS → ${gibsonIP} (TTL: 3600)`);
+    w_(`<span style="color:#00ffff;">[RECON]</span> Traceroute: 14 hops, 47.3ms avg latency`);
+    await delay(200);
+    w_(`<span style="color:#00ffff;">[RECON]</span> OS Fingerprint: Linux 6.x (99.2% confidence)`);
+    w_('');
+
+    // Phase 2: Port scan — rapid fire
+    w_('<span style="color:#ffbf00;">[SCAN]</span> Initiating SYN stealth scan on ' + gibsonIP + '...');
+    await delay(400);
+    for (const svc of services) {
+      await delay(60 + Math.random() * 80);
+      const vuln = svc.ver.includes('UNAUTH') || svc.port === 9090 || svc.port === 8080;
+      w_(`  <span style="color:#666;">${String(svc.port).padEnd(6)}</span> ${svc.svc.padEnd(12)} ${svc.ver.padEnd(30)} ${vuln ? '<span style="color:#ff0040;">★ VULNERABLE</span>' : '<span style="color:#00ff41;">HARDENED</span>'}`);
+    }
+    w_(`<span style="color:#ffbf00;">[SCAN]</span> ${services.length} ports open, 3 attack vectors identified`);
+    w_('');
+    triggerGlitch();
+
+    // Phase 3: Exploitation
+    await delay(500);
+    w_('<span style="color:#ff0040;">[EXPLOIT]</span> Loading 0-day payload: ' + pick(exploits));
+    w_('<span style="color:#ff0040;">[EXPLOIT]</span> Target: Redis 7.2.4 (unauthenticated)');
+    await delay(300);
+    w_('<span style="color:#ff0040;">[EXPLOIT]</span> > SLAVEOF ' + ipAddr() + ' 6379');
+    await delay(200);
+    w_('<span style="color:#ff0040;">[EXPLOIT]</span> > CONFIG SET dir /var/spool/cron/');
+    await delay(200);
+    w_('<span style="color:#ff0040;">[EXPLOIT]</span> > CONFIG SET dbfilename root');
+    await delay(150);
+
+    // Rapid memory dump
+    for (let i = 0; i < 6; i++) {
+      await delay(40);
+      const addr = (0xdead0000 + i * randInt(0x100, 0xfff)).toString(16);
+      const bytes = Array.from({length:24}, () => hex()).join(' ');
+      w_(`  <span style="color:#333;">0x${addr}</span> ${bytes}`);
+    }
+
+    await delay(300);
+    w_('<span style="color:#ff0040;">[EXPLOIT]</span> Injecting reverse shell payload...');
+    await delay(400);
+    w_('<span style="color:#ff0040;">[EXPLOIT]</span> <span style="color:#00ff41;">SHELL ACQUIRED</span> — uid=0(root) gid=0(root)');
+    w_('');
+    triggerGlitch();
+
+    // Phase 4: Privilege escalation & data exfil
+    await delay(400);
+    w_('<span style="color:#bf00ff;">[PRIVESC]</span> Escalating privileges via kernel exploit...');
+    await delay(300);
+    w_('<span style="color:#bf00ff;">[PRIVESC]</span> > cat /etc/shadow | head -5');
+    await delay(100);
+    const users = ['root','plague','margo','cereal','phantom','gibson_admin'];
+    for (const u of users) {
+      await delay(50);
+      const hash = '$6$' + Array.from({length:8},()=>hex()).join('').substring(0,16) + '$' + Array.from({length:20},()=>hex()).join('').substring(0,40);
+      w_(`  <span style="color:#666;">${u.padEnd(16)}</span> ${hash}`);
+    }
+    w_('');
+
+    await delay(300);
+    w_('<span style="color:#bf00ff;">[EXFIL]</span> Locating garbage file...');
+    await delay(400);
+    w_('<span style="color:#bf00ff;">[EXFIL]</span> > find / -name "garbage.dat" -type f');
+    await delay(300);
+    w_('<span style="color:#bf00ff;">[EXFIL]</span> Found: /opt/gibson/classified/garbage.dat (28.4 GB)');
+    await delay(200);
+
+    // Progress bar
+    const barLen = 40;
+    for (let pct = 0; pct <= 100; pct += randInt(3, 12)) {
+      const filled = Math.round(barLen * Math.min(pct, 100) / 100);
+      const bar = '█'.repeat(filled) + '░'.repeat(barLen - filled);
+      const pctStr = Math.min(pct, 100);
+      // overwrite last line
+      const lines = content.innerHTML.split('\n');
+      const lastLine = lines[lines.length - 2];
+      if (lastLine && lastLine.includes('DOWNLOAD')) {
+        lines[lines.length - 2] = `<span style="color:#00ffff;">[DOWNLOAD]</span> <span style="color:#00ff41;">${bar}</span> ${String(pctStr).padStart(3)}% — ${(pctStr * 0.284).toFixed(1)} GB`;
+        content.innerHTML = lines.join('\n');
+      } else {
+        w_(`<span style="color:#00ffff;">[DOWNLOAD]</span> <span style="color:#00ff41;">${bar}</span> ${String(pctStr).padStart(3)}% — ${(pctStr * 0.284).toFixed(1)} GB`);
+      }
+      content.scrollTop = content.scrollHeight;
+      await delay(80 + Math.random() * 120);
+    }
+    // Force 100%
+    const lines2 = content.innerHTML.split('\n');
+    lines2[lines2.length - 2] = `<span style="color:#00ffff;">[DOWNLOAD]</span> <span style="color:#00ff41;">${'█'.repeat(barLen)}</span> 100% — 28.4 GB`;
+    content.innerHTML = lines2.join('\n');
+
+    w_('');
+    await delay(300);
+    w_('<span style="color:#bf00ff;">[EXFIL]</span> Transfer complete. Covering tracks...');
+    await delay(200);
+    w_('<span style="color:#bf00ff;">[CLEAN]</span> > rm -rf /var/log/{auth,syslog,kern}.log');
+    await delay(150);
+    w_('<span style="color:#bf00ff;">[CLEAN]</span> > history -c && unset HISTFILE');
+    await delay(150);
+    w_('<span style="color:#bf00ff;">[CLEAN]</span> > shred -vfz -n 5 /tmp/.exploit_*');
+    await delay(200);
+    w_('');
+
+    // Phase 5: Victory
+    triggerGlitch();
+    await delay(300);
+    w_('<span style="color:#666;">═══════════════════════════════════════════════════════</span>');
+    w_('<span style="color:#00ff41;font-size:12px;letter-spacing:3px;">  ◆ ◆ ◆  GIBSON COMPROMISED  ◆ ◆ ◆</span>');
+    w_('<span style="color:#666;">═══════════════════════════════════════════════════════</span>');
+    w_('');
+    w_(`<span style="color:#00ffff;">  Target:</span>    ${gibsonHost} (${gibsonIP})`);
+    w_(`<span style="color:#00ffff;">  Access:</span>    ROOT (uid=0)`);
+    w_(`<span style="color:#00ffff;">  Exfil:</span>     28.4 GB (garbage.dat)`);
+    w_(`<span style="color:#00ffff;">  Duration:</span>  ${(performance.now() % 60000 / 1000).toFixed(1)}s`);
+    w_(`<span style="color:#00ffff;">  Status:</span>    <span style="color:#00ff41;">HACK THE PLANET!</span>`);
+
+    // ACCESS GRANTED overlay + victory melody
+    await delay(800);
     const overlay = document.createElement('div');
     overlay.style.cssText = `
       position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:99999;
@@ -4421,14 +4573,13 @@ function hackTheGibson() {
     `;
     overlay.textContent = 'ACCESS GRANTED';
     document.body.appendChild(overlay);
-    // Victory melody!
     playVictoryMelody();
     setTimeout(() => {
       overlay.style.transition = 'opacity 1s';
       overlay.style.opacity = '0';
       setTimeout(() => overlay.remove(), 1000);
     }, 2000);
-  }, 4000);
+  })();
 }
 
 function runNetScan() {
