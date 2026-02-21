@@ -2567,7 +2567,7 @@ function createRadar(body) {
       col+=vec3(0.0,1.0,0.25)*0.12*smoothstep(1.0*px,0.0,abs(uv.x))*onDisk;
       col+=vec3(0.0,1.0,0.25)*0.12*smoothstep(1.0*px,0.0,abs(uv.y))*onDisk;
       // Sweep
-      float sweep=mod(T*0.8,TAU);
+      float sweep=mod(-T*0.8,TAU);
       float a=mod(angle-sweep+TAU,TAU);
       float sweepTrail=smoothstep(0.6,0.0,a)*0.2*step(dist,maxR);
       col+=vec3(0.0,1.0,0.25)*sweepTrail;
@@ -2582,7 +2582,7 @@ function createRadar(body) {
         vec2 bp=vec2(cos(ba),sin(ba))*bd*maxR;
         float bDist=length(uv-bp);
         // Fade from sweep
-        float diff=mod(sweep-ba+TAU,TAU);
+        float diff=mod(ba-sweep+TAU,TAU);
         float alpha=max(0.0,1.0-diff/(PI*1.5));
         bool threat=hash(fi*3.47)>0.7;
         vec3 bc=threat?vec3(1.0,0.0,0.25):vec3(0.0,1.0,0.25);
