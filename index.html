@@ -607,6 +607,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/v86@latest/build/libv86.js"></script>
 </head>
 <body>
 <canvas id="matrix-bg"></canvas>
@@ -1630,143 +1631,171 @@ function createPanel(config) {
   return pObj;
 }
 
-// --- TERMINAL ---
-const terminalCommands = {
-  help: () => [
-    { text: 'Available commands:', cls: 'term-cyan' },
-    { text: '  help          - Show this message', cls: 'term-info' },
-    { text: '  scan <target> - Scan target system', cls: 'term-info' },
-    { text: '  exploit       - Run exploit framework', cls: 'term-info' },
-    { text: '  decrypt       - Decrypt intercepted data', cls: 'term-info' },
-    { text: '  trace         - Trace network route', cls: 'term-info' },
-    { text: '  dump          - Dump memory contents', cls: 'term-info' },
-    { text: '  connect       - Connect to remote node', cls: 'term-info' },
-    { text: '  status        - System status', cls: 'term-info' },
-    { text: '  hack          - You know what this does', cls: 'term-purple' },
-    { text: '  clear         - Clear terminal', cls: 'term-info' },
-  ],
-  scan: () => {
-    const results = [];
-    results.push({ text: `Scanning subnet ${randInt(10,192)}.${randInt(0,255)}.${randInt(0,255)}.0/24...`, cls: 'term-info' });
-    const count = randInt(5, 15);
-    for (let i = 0; i < count; i++) {
-      const ports = Array.from({length: randInt(1,5)}, () => pick([22,80,443,3306,5432,8080,8443,27017,6379,9200]));
-      results.push({ text: `  [+] ${ipAddr()} - Ports: ${ports.join(', ')} - ${pick(['Linux','Windows','FreeBSD','RouterOS'])}`, cls: Math.random()>0.7 ? 'term-warn' : 'term-info' });
-    }
-    results.push({ text: `Scan complete. ${count} hosts found.`, cls: 'term-blue' });
-    return results;
-  },
-  exploit: () => [
-    { text: 'Loading exploit framework v4.2.0...', cls: 'term-info' },
-    { text: `[*] Target: ${ipAddr()}`, cls: 'term-info' },
-    { text: '[*] Payload: reverse_tcp_quantum_shell', cls: 'term-info' },
-    { text: '[*] Encoder: polymorphic/shikata_ga_nai', cls: 'term-warn' },
-    { text: `[+] Exploit sent (${randInt(200,2000)} bytes)`, cls: 'term-info' },
-    { text: `[+] ${Math.random()>0.3 ? 'Session opened!' : 'Exploit failed - target patched'}`, cls: Math.random()>0.3 ? 'term-info' : 'term-error' },
-  ],
-  decrypt: () => {
-    const lines = [{ text: 'Decrypting intercepted transmission...', cls: 'term-info' }];
-    for (let i = 0; i < 3; i++) {
-      lines.push({ text: `  Block ${i}: ${Array.from({length:8}, hexWord).join(' ')}`, cls: 'term-warn' });
-    }
-    lines.push({ text: pick([
-      'Decrypted: "The eagle has left the building"',
-      'Decrypted: "Rendezvous at coordinates 41.40338, 2.17403"',
-      'Decrypted: "Operation BLACKOUT is a go"',
-      'Decrypted: "All your base are belong to us"',
-      'Decrypted: "The cake is a lie"',
-      'Decrypted: "HACK THE PLANET"',
-    ]), cls: 'term-purple' });
-    return lines;
-  },
-  trace: () => {
-    const lines = [{ text: `Tracing route to ${ipAddr()}...`, cls: 'term-info' }];
-    const hops = randInt(8, 16);
-    for (let i = 1; i <= hops; i++) {
-      lines.push({ text: `  ${i.toString().padStart(2)}  ${ipAddr()}  ${randInt(1,200)}ms ${i===hops ? '*** TARGET REACHED ***' : ''}`, cls: i===hops ? 'term-purple' : 'term-info' });
-    }
-    return lines;
-  },
-  dump: () => {
-    const lines = [{ text: 'Memory dump @ 0x' + Array.from({length:4}, hex).join(''), cls: 'term-info' }];
-    for (let i = 0; i < 8; i++) {
-      const addr = (0x7fff0000 + i * 16).toString(16);
-      const bytes = Array.from({length:16}, () => hex()).join(' ');
-      const ascii = Array.from({length:16}, () => String.fromCharCode(randInt(33, 126))).join('');
-      lines.push({ text: `  ${addr}: ${bytes}  |${ascii}|`, cls: 'term-info' });
-    }
-    return lines;
-  },
-  connect: () => {
-    const ip = ipAddr();
-    return [
-      { text: `Connecting to ${ip}:${pick([22,443,8080])}...`, cls: 'term-info' },
-      { text: 'SSH-2.0-OpenSSH_8.9 Quantum Edition', cls: 'term-info' },
-      { text: `Authenticating with RSA-4096 key...`, cls: 'term-warn' },
-      { text: `Welcome to ${pick(['darknode','shadowbox','ghostserver','blacksite'])}-${randInt(1,99)}`, cls: 'term-purple' },
-      { text: `root@${ip}:~# `, cls: 'term-info' },
-    ];
-  },
-  status: () => [
-    { text: '=== SYSTEM STATUS ===', cls: 'term-cyan' },
-    { text: `  CPU: ${randInt(30,95)}% | Cores: 8 | Freq: ${(rand(3.5,5.2)).toFixed(1)} THz`, cls: 'term-info' },
-    { text: `  RAM: ${randInt(40,90)}% | ${randInt(50,100)}PB / 128PB`, cls: 'term-info' },
-    { text: `  NET: ↑${(rand(1,50)).toFixed(1)}MB/s ↓${(rand(5,200)).toFixed(1)}MB/s`, cls: 'term-info' },
-    { text: `  TOR: ${randInt(3,7)} relays | Latency: ${randInt(50,300)}ms`, cls: 'term-info' },
-    { text: `  Active sessions: ${randInt(5,30)}`, cls: 'term-info' },
-    { text: `  Threats blocked: ${randInt(100,9999)}`, cls: 'term-warn' },
-  ],
-  hack: () => [
-    { text: '> INITIATING HACK SEQUENCE', cls: 'term-error' },
-    { text: '> ...', cls: 'term-info' },
-    { text: `> ACCESS GRANTED. Welcome, ${pick(['Neo','Trinity','Morpheus','Zero Cool','Crash Override','Acid Burn','The Plague','L0rd N1k0n','Zer0 C00l','c3r34lk1ll3r'])}`, cls: 'term-purple' },
-  ],
-  clear: () => 'CLEAR',
-};
-
+// --- TERMINAL (v86 Linux) ---
 function createTerminal(body) {
-  const output = document.createElement('div');
-  output.className = 'terminal-output';
-  output.innerHTML = `<div class="term-line term-cyan">root@nexus-core:~# Welcome to N3XUS Terminal</div>`;
-
-  const inputLine = document.createElement('div');
-  inputLine.className = 'term-input-line';
-  inputLine.innerHTML = `<span>root@nexus:~# </span>`;
-  const input = document.createElement('input');
-  input.className = 'term-input';
-  input.spellcheck = false;
-  inputLine.appendChild(input);
-
   body.style.display = 'flex';
   body.style.flexDirection = 'column';
+  body.style.overflow = 'hidden';
+
+  // Terminal output area
+  const output = document.createElement('div');
+  output.className = 'terminal-output';
+  output.style.cssText = 'flex:1;overflow-y:auto;white-space:pre-wrap;word-break:break-all;font-size:11px;line-height:1.4;color:var(--green);';
   body.appendChild(output);
-  body.appendChild(inputLine);
 
-  input.addEventListener('keydown', e => {
-    if (e.key === 'Enter') {
-      const cmd = input.value.trim().toLowerCase();
-      addTermLine(output, `root@nexus:~# ${input.value}`, 'term-prompt');
-      input.value = '';
+  // Hidden input to capture keystrokes
+  const hiddenInput = document.createElement('textarea');
+  hiddenInput.style.cssText = 'position:absolute;left:-9999px;top:-9999px;opacity:0;width:0;height:0;';
+  body.appendChild(hiddenInput);
 
-      if (cmd === '') return;
+  // Hidden v86 screen container (required by v86 internally)
+  const screenContainer = document.createElement('div');
+  screenContainer.style.cssText = 'position:absolute;left:-9999px;top:-9999px;width:0;height:0;overflow:hidden;';
+  const screenDiv = document.createElement('div');
+  screenDiv.style.cssText = 'white-space:pre;font:14px monospace;line-height:14px;';
+  const screenCanvas = document.createElement('canvas');
+  screenCanvas.style.display = 'none';
+  screenContainer.appendChild(screenDiv);
+  screenContainer.appendChild(screenCanvas);
+  body.appendChild(screenContainer);
 
-      const basecmd = cmd.split(' ')[0];
-      if (terminalCommands[basecmd]) {
-        const result = terminalCommands[basecmd]();
-        if (result === 'CLEAR') {
-          output.innerHTML = '';
-          return;
-        }
-        result.forEach(l => addTermLine(output, l.text, l.cls));
-      } else {
-        addTermLine(output, `bash: ${basecmd}: command not found. Try 'help'`, 'term-error');
-      }
+  // ANSI escape code state machine
+  let ansiState = 'normal'; // 'normal', 'esc', 'csi'
+  let ansiParams = '';
+
+  const write = (char) => {
+    if (ansiState === 'esc') {
+      if (char === '[') { ansiState = 'csi'; ansiParams = ''; return; }
+      // Other escape sequences (e.g. ESC c for reset) — ignore
+      ansiState = 'normal';
+      return;
     }
-  });
+    if (ansiState === 'csi') {
+      // Collect params until we hit a letter
+      if (char >= '0' && char <= '9' || char === ';' || char === '?' || char === '=') {
+        ansiParams += char;
+        return;
+      }
+      // End of CSI sequence — ignore the command
+      ansiState = 'normal';
+      return;
+    }
+    // Normal mode
+    if (char === '\x1b') { ansiState = 'esc'; return; }
+    if (char === '\r') return; // skip carriage returns
+    if (char === '\x07') return; // skip bell
+    if (char === '\b') {
+      // Backspace — remove last character
+      const t = output.textContent;
+      if (t.length > 0) output.textContent = t.slice(0, -1);
+      return;
+    }
+    output.textContent += char;
+    if (!output._scrollPending) {
+      output._scrollPending = true;
+      requestAnimationFrame(() => {
+        output.scrollTop = output.scrollHeight;
+        output._scrollPending = false;
+      });
+    }
+  };
 
-  input.focus();
-  body.addEventListener('click', () => input.focus());
-  return { output, input };
+  const writeStr = (s) => { for (const c of s) write(c); };
+
+  writeStr('N3XUS SECURE TERMINAL v6.6.6\n');
+  writeStr('Initializing x86 emulator...\n');
+  writeStr('Loading Linux kernel (buildroot-bzimage68)...\n\n');
+
+  let emulator = null;
+  let booted = false;
+
+  try {
+    emulator = new V86({
+      wasm_path: "https://cdn.jsdelivr.net/npm/v86@latest/build/v86.wasm",
+      memory_size: 64 * 1024 * 1024,
+      vga_memory_size: 2 * 1024 * 1024,
+      screen_container: screenContainer,
+      bios: { url: "https://cdn.jsdelivr.net/gh/copy/v86@master/bios/seabios.bin" },
+      vga_bios: { url: "https://cdn.jsdelivr.net/gh/copy/v86@master/bios/vgabios.bin" },
+      bzimage: { url: "https://i.copy.sh/buildroot-bzimage68.bin" },
+      cmdline: "tsc=reliable mitigations=off random.trust_cpu=on",
+      autostart: true,
+      disable_keyboard: true,
+      disable_mouse: true,
+    });
+
+    // Capture serial output
+    let serialBuf = '';
+    emulator.add_listener("serial0-output-byte", function(byte) {
+      const char = String.fromCharCode(byte);
+      write(char);
+      serialBuf += char;
+      // Detect boot completion (Buildroot shows '/ # ' prompt)
+      if (!booted && /[#$%] $/.test(serialBuf.slice(-4))) {
+        booted = true;
+        // Focus input
+        hiddenInput.focus();
+      }
+      // Keep buffer from growing forever
+      if (serialBuf.length > 2000) serialBuf = serialBuf.slice(-500);
+    });
+
+    // Keyboard input → serial
+    hiddenInput.addEventListener('keydown', (e) => {
+      if (!emulator) return;
+      e.preventDefault();
+      e.stopPropagation();
+
+      // Map special keys
+      if (e.key === 'Enter') { emulator.serial0_send('\n'); return; }
+      if (e.key === 'Backspace') { emulator.serial0_send('\x7f'); return; }
+      if (e.key === 'Tab') { emulator.serial0_send('\t'); return; }
+      if (e.key === 'Escape') { emulator.serial0_send('\x1b'); return; }
+      if (e.key === 'ArrowUp') { emulator.serial0_send('\x1b[A'); return; }
+      if (e.key === 'ArrowDown') { emulator.serial0_send('\x1b[B'); return; }
+      if (e.key === 'ArrowRight') { emulator.serial0_send('\x1b[C'); return; }
+      if (e.key === 'ArrowLeft') { emulator.serial0_send('\x1b[D'); return; }
+      if (e.key === 'Home') { emulator.serial0_send('\x1b[H'); return; }
+      if (e.key === 'End') { emulator.serial0_send('\x1b[F'); return; }
+      if (e.key === 'Delete') { emulator.serial0_send('\x1b[3~'); return; }
+
+      // Ctrl+key combos
+      if (e.ctrlKey && e.key.length === 1) {
+        const code = e.key.toUpperCase().charCodeAt(0) - 64;
+        if (code > 0 && code < 32) {
+          emulator.serial0_send(String.fromCharCode(code));
+        }
+        return;
+      }
+
+      // Regular characters
+      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        emulator.serial0_send(e.key);
+      }
+    });
+
+    // Also handle paste
+    hiddenInput.addEventListener('paste', (e) => {
+      if (!emulator) return;
+      e.preventDefault();
+      const text = (e.clipboardData || window.clipboardData).getData('text');
+      if (text) emulator.serial0_send(text);
+    });
+
+  } catch(e) {
+    writeStr('\n[ERROR] v86 initialization failed: ' + e.message + '\n');
+    writeStr('Falling back to static terminal.\n');
+  }
+
+  // Focus on click
+  body.addEventListener('click', () => hiddenInput.focus());
+  // Steal focus when panel is focused
+  const observer = new MutationObserver(() => {
+    if (body.closest('.panel.focused')) hiddenInput.focus();
+  });
+  observer.observe(body.closest('.panel') || body, { attributes: true, attributeFilter: ['class'] });
+
+  return { output, input: hiddenInput, emulator };
 }
 
 function addTermLine(container, text, cls) {
@@ -3622,7 +3651,7 @@ function initAll() {
 
   // Layout - tiled
   const layouts = [
-    { id: 'p-terminal', title: '◆ TERMINAL // root@nexus', x: 0, y: 0, w: ww*0.3, h: wh*0.4, init: createTerminal, tabs: ['BASH', 'ZSH', 'PYTHON'] },
+    { id: 'p-terminal', title: '◆ TERMINAL // Linux x86', x: 0, y: 0, w: ww*0.3, h: wh*0.4, init: createTerminal },
     { id: 'p-netgraph', title: '◆ NET TRAFFIC MONITOR', x: ww*0.3, y: 0, w: ww*0.35, h: wh*0.4, init: createNetworkGraph },
     { id: 'p-worldmap', title: '◆ GLOBAL THREAT MAP', x: ww*0.65, y: 0, w: ww*0.35, h: wh*0.4, init: createWorldMap },
     { id: 'p-logs', title: '◆ SYSTEM LOGS', x: 0, y: wh*0.4, w: ww*0.22, h: wh*0.3, init: createLogFeed },
@@ -4597,16 +4626,16 @@ function runNetScan() {
 
 function spawnFloatingTerminal() {
   const p = createPanel({
-    title: `◆ TERMINAL // PID:${randInt(1000,9999)}`,
+    title: `◆ TERMINAL // tty${randInt(1,99)} PID:${randInt(1000,9999)}`,
     x: randInt(50, 400),
     y: randInt(50, 300),
-    w: 450,
-    h: 280,
+    w: 520,
+    h: 320,
   });
   createTerminal(p.body);
   p.el.classList.add('focused');
   p.el.style.zIndex = ++panelZIndex;
-  notify('New terminal spawned');
+  notify('Linux terminal spawned');
 }
 
 function resetLayout() {
